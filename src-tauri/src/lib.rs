@@ -209,6 +209,9 @@ pub async fn run() {
             // 配置相关命令
             load_config,
             save_config,
+            set_config,
+            export_config_to_path,
+            import_config_from_path,
             save_user_config,
             save_global_config,
             add_user_template,
@@ -219,6 +222,7 @@ pub async fn run() {
             get_file_size,
             read_dir_recursive,
             upload_cover,
+            store_local_cover,
             download_cover,
             get_type_list,
             get_topic_list,

@@ -452,13 +452,16 @@ const supportedFormats = [
     '.m4v'
 ]
 
+const DEFAULT_VIDEO_DIR_KEY = 'default-video-dir'
+
 // 选择文件夹
 const selectFolder = async () => {
     try {
         const selected = await open({
             directory: true,
             multiple: true, // 允许多选
-            title: '选择要监控的文件夹'
+            title: '选择要监控的文件夹',
+            defaultPath: localStorage.getItem(DEFAULT_VIDEO_DIR_KEY) || undefined
         })
 
         if (selected) {
@@ -474,6 +477,10 @@ const selectFolder = async () => {
                 if (!settings.value.folderPaths.includes(selected)) {
                     settings.value.folderPaths.push(selected)
                 }
+            }
+            const firstFolder = Array.isArray(selected) ? selected[0] : selected
+            if (firstFolder) {
+                localStorage.setItem(DEFAULT_VIDEO_DIR_KEY, firstFolder)
             }
         }
     } catch (error) {

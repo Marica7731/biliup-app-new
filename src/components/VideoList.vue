@@ -10,6 +10,24 @@
                 <el-icon><folder-opened /></el-icon>
                 文件夹监控
             </el-button>
+            <el-dropdown trigger="click">
+                <el-button type="info" size="small">
+                    排序
+                </el-button>
+                <template #dropdown>
+                    <el-dropdown-menu>
+                        <el-dropdown-item @click="sortVideosByName">
+                            文件名 A-Z
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="sortVideosByMtime">
+                            修改时间
+                        </el-dropdown-item>
+                    </el-dropdown-menu>
+                </template>
+            </el-dropdown>
+            <el-button type="warning" @click="openBatchRename" size="small">
+                批量命名
+            </el-button>
             <el-button
                 type="success"
                 size="small"
@@ -195,6 +213,25 @@
             @add-videos="handleAddVideos"
             @submit-videos="handleSubmitVideos"
         />
+
+        <!-- 批量命名对话框 -->
+        <el-dialog v-model="batchRenameVisible" title="批量命名分 P" width="520px">
+            <div class="batch-rename-tip">
+                每行对应一个分 P 名称，按当前列表顺序依次替换。空行会跳过。
+            </div>
+            <el-input
+                v-model="batchRenameText"
+                type="textarea"
+                :rows="8"
+                placeholder="示例：\n第一集\n第二集\n第三集"
+            />
+            <template #footer>
+                <div class="dialog-footer">
+                    <el-button @click="batchRenameVisible = false">取消</el-button>
+                    <el-button type="primary" @click="applyBatchRename">应用</el-button>
+                </div>
+            </template>
+        </el-dialog>
     </div>
 </template>
 
@@ -246,6 +283,8 @@ const uploadStore = useUploadStore()
 
 // 文件夹监控对话框状态
 const showFolderWatchDialog = ref(false)
+const batchRenameVisible = ref(false)
+const batchRenameText = ref('')
 
 // 模板标题
 const templateTitle = computed(() => props.templateTitle)
@@ -519,6 +558,65 @@ const handleAddVideos = (newVideos: any[]) => {
 const handleSubmitVideos = () => {
     // 发出提交稿件事件到MainView，让它调用submitTemplate
     emit('submitTemplate')
+}
+
+const getVideoDisplayName = (video: any) => {
+    if (video.filename) return video.filename
+    if (video.path) return video.path.split(/[/\\]/).pop() || video.path
+    return video.title || ''
+}
+
+const openBatchRename = () => {
+    batchRenameText.value = ''
+    batchRenameVisible.value = true
+}
+
+const applyBatchRename = () => {
+    if (!props.videos || props.videos.length === 0) {
+        batchRenameVisible.value = false
+        return
+    }
+
+    const lines = batchRenameText.value
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+
+    if (lines.length === 0) {
+        batchRenameVisible.value = false
+        return
+    }
+
+    const newVideos = props.videos.map((video, index) => {
+        if (index >= lines.length) return video
+        return {
+            ...video,
+            title: lines[index].slice(0, 80)
+        }
+    })
+
+    emit('update:videos', newVideos)
+    batchRenameVisible.value = false
+}
+
+const sortVideosByName = () => {
+    if (!props.videos || props.videos.length === 0) return
+    const newVideos = [...props.videos].sort((a, b) => {
+        const aName = getVideoDisplayName(a)
+        const bName = getVideoDisplayName(b)
+        return aName.localeCompare(bName, 'zh-CN')
+    })
+    emit('update:videos', newVideos)
+}
+
+const sortVideosByMtime = () => {
+    if (!props.videos || props.videos.length === 0) return
+    const newVideos = [...props.videos].sort((a, b) => {
+        const aTime = a.mtime || 0
+        const bTime = b.mtime || 0
+        return bTime - aTime
+    })
+    emit('update:videos', newVideos)
 }
 </script>
 
@@ -830,6 +928,18 @@ const handleSubmitVideos = () => {
     justify-content: center;
     gap: 3px;
     margin-bottom: 5px;
+}
+
+.batch-rename-tip {
+    font-size: 12px;
+    color: #909399;
+    margin-bottom: 8px;
+}
+
+.dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 .upload-tip {

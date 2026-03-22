@@ -8,6 +8,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "icon:regen": "tauri icon src-tauri/icons/icon.png",
+    "build:release": "npm run icon:regen && tauri build",
     "fmt": "prettier --write \"src/**/*.{vue,ts,js,json}\" && cd src-tauri && cargo fmt && cd ..",
     "format": "prettier --write \"src/**/*.{vue,ts,js,json}\"",
     "format:check": "prettier --check \"src/**/*.{vue,ts,js,json}\""

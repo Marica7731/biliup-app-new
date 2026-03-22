@@ -1,7 +1,9 @@
 use biliup::bilibili::BiliBili;
 use serde_json::{Value, json};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use std::{fs::File, io::Read, path::Path};
+use std::{fs, fs::File, io::Read, path::Path, path::PathBuf};
 use tauri::Manager;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
@@ -460,43 +462,131 @@ pub async fn switch_season(
 
 /// 导出日志
 #[tauri::command]
-pub async fn export_logs() -> Result<String, String> {
+pub async fn export_logs(export_path: String, date_filter: Option<String>) -> Result<String, String> {
     use std::fs;
     use std::io::Write;
     use zip::ZipWriter;
+    use chrono::{DateTime, Local, NaiveDate};
 
     let log_dir = crate::utils::get_log_path().map_err(|e| format!("获取日志目录失败: {e}"))?;
-
-    // 创建临时zip文件
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let zip_path = log_dir.join(format!("logs_export_{timestamp}.zip"));
-
-    let zip_file = fs::File::create(&zip_path).map_err(|e| format!("创建ZIP文件失败: {e}"))?;
+    let zip_file = fs::File::create(&export_path).map_err(|e| format!("创建ZIP文件失败: {e}"))?;
     let mut zip = ZipWriter::new(zip_file);
     let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
     // 添加日志文件
+    let parsed_filter = date_filter
+        .as_ref()
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+
+    let mut matched_files: Vec<String> = Vec::new();
+    let mut read_failed_files: Vec<String> = Vec::new();
+
     if let Ok(entries) = fs::read_dir(&log_dir) {
         for entry in entries.flatten() {
             if let Some(extension) = entry.path().extension() {
                 if extension == "log" {
                     let file_name = entry.file_name().to_string_lossy().to_string();
+                    if let Some(filter_date) = parsed_filter.as_ref() {
+                        let date_text = date_filter.as_deref().unwrap_or("");
+                        let mut include = file_name.contains(date_text);
+                        if !include {
+                            if let Ok(meta) = fs::metadata(entry.path()) {
+                                if let Ok(modified) = meta.modified() {
+                                    let local_time: DateTime<Local> = modified.into();
+                                    include = local_time.date_naive() == *filter_date;
+                                }
+                            }
+                        }
+                        if !include {
+                            if let Ok(bytes) = fs::read(entry.path()) {
+                                let content = String::from_utf8_lossy(&bytes);
+                                include = content.contains(date_text);
+                            }
+                        }
+                        if !include {
+                            continue;
+                        }
+                    }
                     if let Ok(content) = fs::read(entry.path()) {
                         zip.start_file(&file_name, options)
                             .map_err(|e| format!("创建ZIP条目失败: {e}"))?;
                         zip.write_all(&content)
                             .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
+                        matched_files.push(file_name.clone());
+                    } else {
+                        read_failed_files.push(file_name.clone());
                     }
                 }
             }
         }
     }
 
+    let manifest = format!(
+        "date_filter={}\nmatched_files={}\n{}\nread_failed_files={}\n{}\n",
+        date_filter.clone().unwrap_or_else(|| "ALL".to_string()),
+        matched_files.len(),
+        matched_files.join("\n"),
+        read_failed_files.len(),
+        read_failed_files.join("\n")
+    );
+    zip.start_file("export_manifest.txt", options)
+        .map_err(|e| format!("创建ZIP条目失败: {e}"))?;
+    zip.write_all(manifest.as_bytes())
+        .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
+
     zip.finish().map_err(|e| format!("完成ZIP文件失败: {e}"))?;
 
-    Ok(zip_path.to_string_lossy().to_string())
+    Ok(export_path)
+}
+
+#[tauri::command]
+pub async fn store_local_cover(
+    uid: u64,
+    key: String,
+    source_path: String,
+    is_folder: bool,
+) -> Result<String, String> {
+    let source = PathBuf::from(&source_path);
+    if !source.exists() {
+        return Err("封面文件不存在".to_string());
+    }
+
+    let ext = source
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("jpg")
+        .to_string();
+
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let hashed_key = format!("{:016x}", hasher.finish());
+
+    let cover_dir = crate::utils::get_config_dir()
+        .map_err(|e| format!("获取配置目录失败: {e}"))?
+        .join("covers")
+        .join(uid.to_string());
+    fs::create_dir_all(&cover_dir).map_err(|e| format!("创建封面目录失败: {e}"))?;
+
+    let target_name = if is_folder {
+        format!("folder_{}.{}", hashed_key, ext)
+    } else {
+        format!("template_{}.{}", hashed_key, ext)
+    };
+    let target_path = cover_dir.join(target_name);
+    info!(
+        "保存本地封面: uid={}, is_folder={}, source={}, target={}",
+        uid,
+        is_folder,
+        source.display(),
+        target_path.display()
+    );
+    fs::copy(&source, &target_path).map_err(|e| format!("保存封面文件失败: {e}"))?;
+    if !target_path.exists() {
+        return Err("封面文件保存后未找到目标文件".to_string());
+    }
+    Ok(target_path.to_string_lossy().to_string())
 }
 
 /// 检查更新

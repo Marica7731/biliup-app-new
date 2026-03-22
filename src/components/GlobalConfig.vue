@@ -63,6 +63,32 @@
                 </div>
             </el-form-item>
 
+            <!-- 配置导入导出 -->
+            <el-form-item label="配置导入/导出">
+                <div class="import-export-row">
+                    <el-checkbox v-model="includeCookie">包含 Cookie</el-checkbox>
+                    <el-button size="small" @click="exportConfig">导出配置</el-button>
+                    <el-button size="small" @click="importConfig">导入配置</el-button>
+                </div>
+                <div class="form-tip">导入后建议重启程序以刷新登录状态</div>
+            </el-form-item>
+
+            <!-- 默认目录设置 -->
+            <el-form-item label="默认封面目录">
+                <div class="path-setting-row">
+                    <el-input v-model="defaultCoverDir" readonly placeholder="未设置" />
+                    <el-button size="small" @click="selectDefaultCoverDir">设置</el-button>
+                    <el-button size="small" @click="clearDefaultCoverDir">清除</el-button>
+                </div>
+            </el-form-item>
+            <el-form-item label="默认视频目录">
+                <div class="path-setting-row">
+                    <el-input v-model="defaultVideoDir" readonly placeholder="未设置" />
+                    <el-button size="small" @click="selectDefaultVideoDir">设置</el-button>
+                    <el-button size="small" @click="clearDefaultVideoDir">清除</el-button>
+                </div>
+            </el-form-item>
+
             <!-- 用户配置分类标签 -->
             <el-divider content-position="left">
                 <el-text type="primary" size="large">用户配置</el-text>
@@ -221,6 +247,8 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { ElMessageBox } from 'element-plus'
 import { useUserConfigStore } from '../stores/user_config'
 import { useAuthStore } from '../stores/auth'
@@ -254,6 +282,9 @@ const utilsStore = useUtilsStore()
 const visible = ref(false)
 const loading = ref(false)
 const saving = ref(false)
+const includeCookie = ref(true)
+const defaultCoverDir = ref(localStorage.getItem('default-cover-dir') || '')
+const defaultVideoDir = ref(localStorage.getItem('default-video-dir') || '')
 
 // 用户配置相关
 const selectedUserUid = ref<number | null>(null)
@@ -425,6 +456,82 @@ const handleSave = async () => {
     } finally {
         saving.value = false
     }
+}
+
+const exportConfig = async () => {
+    try {
+        const savePath = await save({
+            filters: [{ name: 'JSON', extensions: ['json'] }],
+            defaultPath: 'biliup-config.json'
+        })
+        if (!savePath) return
+        await invoke('export_config_to_path', {
+            path: savePath,
+            includeCookie: includeCookie.value
+        })
+        utilsStore.showMessage('配置导出成功', 'success')
+        if (!includeCookie.value) {
+            utilsStore.showMessage('导出文件不包含 Cookie，导入时需已有登录信息', 'warning')
+        }
+    } catch (error) {
+        console.error('导出配置失败:', error)
+        utilsStore.showMessage(`导出配置失败: ${error}`, 'error')
+    }
+}
+
+const importConfig = async () => {
+    try {
+        const selected = await open({
+            multiple: false,
+            filters: [{ name: 'JSON', extensions: ['json'] }]
+        })
+        if (!selected || selected.length === 0) return
+        const filePath = Array.isArray(selected) ? selected[0] : selected
+        const warning = (await invoke('import_config_from_path', {
+            path: filePath,
+            keepExistingCookie: true
+        })) as string
+        if (warning) {
+            utilsStore.showMessage(warning, 'warning')
+        }
+        await userConfigStore.loadConfig()
+        utilsStore.showMessage('配置导入成功', 'success')
+    } catch (error) {
+        console.error('导入配置失败:', error)
+        utilsStore.showMessage(`导入配置失败: ${error}`, 'error')
+    }
+}
+
+const selectDefaultCoverDir = async () => {
+    try {
+        const selected = await open({ directory: true, multiple: false })
+        if (!selected) return
+        defaultCoverDir.value = Array.isArray(selected) ? selected[0] : selected
+        localStorage.setItem('default-cover-dir', defaultCoverDir.value)
+    } catch (error) {
+        utilsStore.showMessage(`设置默认封面目录失败: ${error}`, 'error')
+    }
+}
+
+const clearDefaultCoverDir = () => {
+    defaultCoverDir.value = ''
+    localStorage.removeItem('default-cover-dir')
+}
+
+const selectDefaultVideoDir = async () => {
+    try {
+        const selected = await open({ directory: true, multiple: false })
+        if (!selected) return
+        defaultVideoDir.value = Array.isArray(selected) ? selected[0] : selected
+        localStorage.setItem('default-video-dir', defaultVideoDir.value)
+    } catch (error) {
+        utilsStore.showMessage(`设置默认视频目录失败: ${error}`, 'error')
+    }
+}
+
+const clearDefaultVideoDir = () => {
+    defaultVideoDir.value = ''
+    localStorage.removeItem('default-video-dir')
 }
 
 // 取消操作
@@ -623,6 +730,20 @@ const hasUnsavedChanges = (): boolean => {
     border-radius: 6px;
     padding: 15px;
     margin-top: 10px;
+}
+
+.import-export-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.path-setting-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
 }
 
 .proxy-type-select {

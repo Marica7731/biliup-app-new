@@ -54,7 +54,7 @@
 
         <el-container class="main-container">
             <!-- 用户模板侧边栏 -->
-            <el-aside width="300px" class="sidebar">
+            <el-aside ref="sidebarRef" class="sidebar" :style="sidebarInlineStyle">
                 <div class="sidebar-header">
                     <h3></h3>
                     <div class="header-buttons">
@@ -137,82 +137,281 @@
 
                             <!-- 模板列表 -->
                             <div class="template-list" v-show="userTemplate.expanded">
+                                <div class="template-tools">
+                                    <el-select
+                                        size="small"
+                                        class="template-sort-select"
+                                        :model-value="getTemplateSortMode(userTemplate.user.uid)"
+                                        :disabled="templateLoading || userTemplate.user.expired"
+                                        @change="
+                                            (mode: string) =>
+                                                updateTemplateSortMode(userTemplate.user.uid, mode)
+                                        "
+                                    >
+                                        <el-option label="手动排序" value="manual" />
+                                        <el-option label="A-Z 排序" value="az" />
+                                    </el-select>
+                                    <el-button
+                                        size="small"
+                                        link
+                                        :disabled="templateLoading || userTemplate.user.expired"
+                                        @click.stop="createTemplateFolder(userTemplate.user.uid)"
+                                    >
+                                        新建模板夹
+                                    </el-button>
+                                </div>
                                 <div
-                                    v-for="template in userTemplate.templates"
-                                    :key="`${userTemplate.user.uid}-${template.name}`"
-                                    class="template-item"
+                                    v-for="item in getTemplateRenderItems(
+                                        userTemplate.user.uid,
+                                        userTemplate.templates
+                                    )"
+                                    :key="`${userTemplate.user.uid}-${item.id}`"
+                                    class="template-entry"
                                     :class="{
-                                        active:
-                                            selectedUser?.uid === userTemplate.user.uid &&
-                                            currentTemplateName === template.name,
-                                        'auto-submitting':
-                                            highlightAutoSubmitting &&
-                                            autoSubmittingRecord[
-                                                getTemplateKey(userTemplate.user.uid, template.name)
-                                            ],
-                                        'auto-submitting-simple':
-                                            !highlightAutoSubmitting &&
-                                            autoSubmittingRecord[
-                                                getTemplateKey(userTemplate.user.uid, template.name)
-                                            ],
-                                        'template-loading':
-                                            templateLoading &&
-                                            selectedUser?.uid === userTemplate.user.uid &&
-                                            currentTemplateName === template.name,
-                                        disabled: templateLoading || userTemplate.user.expired
+                                        'entry-folder': item.kind === 'folder',
+                                        'entry-template': item.kind === 'template'
                                     }"
-                                    @click="
-                                        handleTemplateSelection(userTemplate.user, template.name)
-                                    "
                                 >
-                                    <div class="template-main">
-                                        <div class="template-name">
-                                            {{ template.name }}
-                                            <span
-                                                v-show="
-                                                    checkTemplateHasUnsavedChanges(
-                                                        userTemplate.user.uid,
-                                                        template.name
+                                    <div
+                                        v-if="item.kind === 'folder'"
+                                        class="template-folder-header"
+                                        @click="
+                                            toggleFolderCollapsed(
+                                                userTemplate.user.uid,
+                                                item.folderId
+                                            )
+                                        "
+                                    >
+                                        <div class="template-folder-info">
+                                            <img
+                                                class="template-folder-cover"
+                                                :src="
+                                                    resolveCoverSrc(
+                                                        getFolderCoverPath(
+                                                            userTemplate.user.uid,
+                                                            item.folderId
+                                                        ),
+                                                        'folder'
                                                     )
                                                 "
-                                                class="unsaved-indicator"
-                                                title="有未保存的修改"
-                                            ></span>
+                                                @error="
+                                                    event =>
+                                                        handleCoverError(
+                                                            event,
+                                                            getFolderCoverPath(
+                                                                userTemplate.user.uid,
+                                                                item.folderId
+                                                            ),
+                                                            'folder'
+                                                        )
+                                                "
+                                            />
+                                            <span class="template-folder-title">
+                                                {{ item.name }}
+                                                <small>({{ item.count }})</small>
+                                            </span>
                                         </div>
-                                        <div class="template-desc">
-                                            {{ template.config.title || '无标题' }}
+                                        <div class="template-folder-actions" @click.stop>
+                                            <el-icon
+                                                class="folder-toggle-icon"
+                                                :class="{
+                                                    collapsed: isFolderCollapsed(
+                                                        userTemplate.user.uid,
+                                                        item.folderId
+                                                    )
+                                                }"
+                                            >
+                                                <arrow-down />
+                                            </el-icon>
+                                            <el-dropdown
+                                                trigger="click"
+                                                :disabled="templateLoading || userTemplate.user.expired"
+                                            >
+                                                <el-button link size="small">管理</el-button>
+                                                <template #dropdown>
+                                                    <el-dropdown-menu>
+                                                        <el-dropdown-item
+                                                            @click.stop="
+                                                                selectFolderCover(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >设置封面</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
+                                                            @click.stop="
+                                                                clearFolderCoverPath(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >清除封面</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
+                                                            @click.stop="
+                                                                renameTemplateFolder(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >重命名</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
+                                                            divided
+                                                            @click.stop="
+                                                                deleteTemplateFolder(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >删除</el-dropdown-item
+                                                        >
+                                                    </el-dropdown-menu>
+                                                </template>
+                                            </el-dropdown>
                                         </div>
                                     </div>
-                                    <el-dropdown
-                                        @command="
-                                            (command: string) =>
-                                                handleTemplateCommand(
-                                                    command,
-                                                    userTemplate.user,
-                                                    template
-                                                )
+                                    <div
+                                        v-else
+                                        class="template-item"
+                                        :class="{
+                                            active:
+                                                selectedUser?.uid === userTemplate.user.uid &&
+                                                currentTemplateName === item.template.name,
+                                            'auto-submitting':
+                                                highlightAutoSubmitting &&
+                                                autoSubmittingRecord[
+                                                    getTemplateKey(
+                                                        userTemplate.user.uid,
+                                                        item.template.name
+                                                    )
+                                                ],
+                                            'auto-submitting-simple':
+                                                !highlightAutoSubmitting &&
+                                                autoSubmittingRecord[
+                                                    getTemplateKey(
+                                                        userTemplate.user.uid,
+                                                        item.template.name
+                                                    )
+                                                ],
+                                            'template-loading':
+                                                templateLoading &&
+                                                selectedUser?.uid === userTemplate.user.uid &&
+                                                currentTemplateName === item.template.name,
+                                            disabled: templateLoading || userTemplate.user.expired,
+                                            'template-item-in-folder': item.folderId
+                                        }"
+                                        @click="
+                                            handleTemplateSelection(
+                                                userTemplate.user,
+                                                item.template.name
+                                            )
                                         "
-                                        @click.stop
-                                        trigger="click"
-                                        :disabled="templateLoading"
                                     >
-                                        <el-button link size="small" class="template-menu-btn">
-                                            <el-icon><more-filled /></el-icon>
-                                        </el-button>
-                                        <template #dropdown>
-                                            <el-dropdown-menu>
-                                                <el-dropdown-item command="duplicate"
-                                                    >复制</el-dropdown-item
-                                                >
-                                                <el-dropdown-item command="rename"
-                                                    >重命名</el-dropdown-item
-                                                >
-                                                <el-dropdown-item command="delete" divided
-                                                    >删除</el-dropdown-item
-                                                >
-                                            </el-dropdown-menu>
-                                        </template>
-                                    </el-dropdown>
+                                        <img
+                                            class="template-cover"
+                                            :src="
+                                                resolveCoverSrc(
+                                                    getTemplateCoverPath(
+                                                        userTemplate.user.uid,
+                                                        item.template.name
+                                                    ),
+                                                    'template'
+                                                )
+                                            "
+                                            @error="
+                                                event =>
+                                                    handleCoverError(
+                                                        event,
+                                                        getTemplateCoverPath(
+                                                            userTemplate.user.uid,
+                                                            item.template.name
+                                                        ),
+                                                        'template'
+                                                    )
+                                            "
+                                        />
+                                        <div class="template-main">
+                                            <div class="template-name">
+                                                {{ item.template.name }}
+                                                <span
+                                                    v-show="
+                                                        checkTemplateHasUnsavedChanges(
+                                                            userTemplate.user.uid,
+                                                            item.template.name
+                                                        )
+                                                    "
+                                                    class="unsaved-indicator"
+                                                    title="有未保存的修改"
+                                                ></span>
+                                            </div>
+                                            <div class="template-desc">
+                                                {{ item.template.config.title || '无标题' }}
+                                            </div>
+                                        </div>
+                                        <el-dropdown
+                                            @command="
+                                                (command: string) =>
+                                                    handleTemplateCommand(
+                                                        command,
+                                                        userTemplate.user,
+                                                        item.template,
+                                                        item.folderId
+                                                    )
+                                            "
+                                            @click.stop
+                                            trigger="click"
+                                            :disabled="templateLoading"
+                                        >
+                                            <el-button link size="small" class="template-menu-btn">
+                                                <el-icon><more-filled /></el-icon>
+                                            </el-button>
+                                            <template #dropdown>
+                                                <el-dropdown-menu>
+                                                    <el-dropdown-item command="duplicate"
+                                                        >复制</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="rename"
+                                                        >重命名</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move"
+                                                        >移动到模板夹</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move_root"
+                                                        >移出模板夹</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="set_cover"
+                                                        >设置封面</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="clear_cover"
+                                                        >清除封面</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move_up"
+                                                        >上移</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move_down"
+                                                        >下移</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="delete" divided
+                                                        >删除</el-dropdown-item
+                                                    >
+                                                </el-dropdown-menu>
+                                            </template>
+                                        </el-dropdown>
+                                    </div>
+                                </div>
+
+                                <div
+                                    v-if="
+                                        !getTemplateRenderItems(
+                                            userTemplate.user.uid,
+                                            userTemplate.templates
+                                        ).length
+                                    "
+                                    class="empty-folder"
+                                >
+                                    暂无模板
                                 </div>
 
                                 <div v-if="userTemplate.user.expired" class="expired-mask">
@@ -244,6 +443,13 @@
                     </div>
                 </div>
             </el-aside>
+            <div
+                class="sidebar-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                title="拖动调整模板栏宽度"
+                @pointerdown="startSidebarResize"
+            ></div>
 
             <!-- 主要内容区域 -->
             <el-main class="main-content" v-if="currentForm">
@@ -970,6 +1176,34 @@
             @template-created="handleTemplateCreated"
         />
 
+        <!-- 移动模板到模板夹 -->
+        <el-dialog v-model="moveDialogVisible" title="移动到模板夹" width="420px">
+            <div class="move-dialog-content">
+                <el-select
+                    v-model="moveDialogTargetFolderId"
+                    placeholder="选择模板夹"
+                    class="move-dialog-select"
+                >
+                    <el-option label="未分组" value="" />
+                    <el-option
+                        v-for="folder in getUserOrganizer(moveDialogUserUid || 0).folders"
+                        :key="folder.id"
+                        :label="folder.name"
+                        :value="folder.id"
+                    />
+                </el-select>
+                <el-button size="small" @click="createFolderFromMoveDialog">
+                    新建模板夹
+                </el-button>
+            </div>
+            <template #footer>
+                <div class="dialog-footer">
+                    <el-button @click="moveDialogVisible = false">取消</el-button>
+                    <el-button type="primary" @click="confirmMoveDialog">确定</el-button>
+                </div>
+            </template>
+        </el-dialog>
+
         <!-- 登录对话框 -->
         <el-dialog
             v-model="showLoginDialog"
@@ -1034,7 +1268,8 @@ import {
     QuestionFilled
 } from '@element-plus/icons-vue'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { copyFile, remove } from '@tauri-apps/plugin-fs'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { readFile, stat } from '@tauri-apps/plugin-fs'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import LoginView from '../components/LoginView.vue'
@@ -1053,6 +1288,40 @@ const authStore = useAuthStore()
 const userConfigStore = useUserConfigStore()
 const uploadStore = useUploadStore()
 const utilsStore = useUtilsStore()
+
+type SortMode = 'manual' | 'az'
+
+interface TemplateFolder {
+    id: string
+    name: string
+    order: string[]
+    collapsed?: boolean
+    coverPath?: string
+}
+
+interface UserTemplateOrganizer {
+    sortMode: SortMode
+    ungroupedOrder: string[]
+    folders: TemplateFolder[]
+    templateCovers?: Record<string, string>
+}
+
+interface TemplateRenderItemFolder {
+    kind: 'folder'
+    id: string
+    folderId: string
+    name: string
+    count: number
+}
+
+interface TemplateRenderItemTemplate {
+    kind: 'template'
+    id: string
+    folderId?: string
+    template: { name: string; config: TemplateConfig }
+}
+
+type TemplateRenderItem = TemplateRenderItemFolder | TemplateRenderItemTemplate
 
 // 计算属性
 const loginUsers = computed(() => authStore.loginUsers)
@@ -1101,6 +1370,638 @@ watch(highlightAutoSubmitting, newValue => {
 
 // 生成模板键名
 const getTemplateKey = (uid: number, templateName: string) => `${uid}-${templateName}`
+
+const TEMPLATE_ORGANIZER_KEY = 'template-organizer-v1'
+const TEMPLATE_COVER_DEFAULT_KEY = 'template-cover-default'
+const FOLDER_COVER_DEFAULT_KEY = 'folder-cover-default'
+const SIDEBAR_WIDTH_KEY = 'template-sidebar-width'
+const SIDEBAR_MIN_WIDTH = 280
+const DEFAULT_TEMPLATE_COVER = '/noface.jpg'
+const DEFAULT_FOLDER_COVER = '/tauri.svg'
+const templateOrganizer = ref<Record<number, UserTemplateOrganizer>>({})
+const coverVersionMap = ref<Record<string, number>>({})
+const sidebarRef = ref<any>(null)
+const sidebarWidth = ref<number>(320)
+let sidebarResizeCleanup: (() => void) | null = null
+const moveDialogVisible = ref(false)
+const moveDialogUserUid = ref<number | null>(null)
+const moveDialogTemplateName = ref<string>('')
+const moveDialogTemplateFolderId = ref<string | null>(null)
+const moveDialogTargetFolderId = ref<string>('')
+
+const getDefaultOrganizer = (): UserTemplateOrganizer => ({
+    sortMode: 'manual',
+    ungroupedOrder: [],
+    folders: [],
+    templateCovers: {}
+})
+
+const saveTemplateOrganizer = () => {
+    localStorage.setItem(TEMPLATE_ORGANIZER_KEY, JSON.stringify(templateOrganizer.value))
+}
+
+const loadTemplateOrganizer = () => {
+    try {
+        const raw = localStorage.getItem(TEMPLATE_ORGANIZER_KEY)
+        if (!raw) return
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object') {
+            templateOrganizer.value = parsed
+        }
+    } catch (error) {
+        console.error('读取模板排序/模板夹配置失败:', error)
+    }
+}
+
+const clampSidebarWidth = (width: number) => {
+    const maxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(window.innerWidth * 0.6))
+    return Math.min(maxWidth, Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width)))
+}
+
+const loadSidebarWidth = () => {
+    const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY)
+    if (!raw) {
+        sidebarWidth.value = clampSidebarWidth(320)
+        return
+    }
+    const parsed = Number.parseInt(raw, 10)
+    sidebarWidth.value = Number.isFinite(parsed) ? clampSidebarWidth(parsed) : clampSidebarWidth(320)
+}
+
+const saveSidebarWidth = () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
+}
+
+const sidebarInlineStyle = computed(() => ({
+    width: `${sidebarWidth.value}px`,
+    flex: `0 0 ${sidebarWidth.value}px`
+}))
+
+const startSidebarResize = (event: PointerEvent) => {
+    const sidebarElement = sidebarRef.value?.$el || sidebarRef.value
+    if (!sidebarElement || typeof sidebarElement.getBoundingClientRect !== 'function') return
+    event.preventDefault()
+    ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+    const startX = event.clientX
+    const startWidth = sidebarElement.getBoundingClientRect().width
+
+    const onMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX
+        sidebarWidth.value = clampSidebarWidth(startWidth + delta)
+    }
+
+    const onUp = async (upEvent: PointerEvent) => {
+        ;(event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(upEvent.pointerId)
+        document.body.classList.remove('sidebar-resizing')
+        saveSidebarWidth()
+        await utilsStore.log('log', `模板栏宽度已调整: ${sidebarWidth.value}px`)
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+    }
+
+    document.body.classList.add('sidebar-resizing')
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+}
+
+const getUserOrganizer = (uid: number): UserTemplateOrganizer => {
+    if (!templateOrganizer.value[uid]) {
+        templateOrganizer.value[uid] = getDefaultOrganizer()
+    }
+    return templateOrganizer.value[uid]
+}
+
+const ensureTemplateInOrganizer = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    const existsInFolder = organizer.folders.some(folder => folder.order.includes(templateName))
+    const existsInRoot = organizer.ungroupedOrder.includes(templateName)
+    if (!existsInFolder && !existsInRoot) {
+        organizer.ungroupedOrder.push(templateName)
+    }
+}
+
+const removeTemplateFromOrganizer = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    organizer.ungroupedOrder = organizer.ungroupedOrder.filter(name => name !== templateName)
+    organizer.folders.forEach(folder => {
+        folder.order = folder.order.filter(name => name !== templateName)
+    })
+}
+
+const sanitizeUserOrganizer = (
+    uid: number,
+    templates: Array<{ name: string; config: TemplateConfig }>
+) => {
+    const organizer = getUserOrganizer(uid)
+    const existingNames = new Set(templates.map(t => t.name))
+    const seen = new Set<string>()
+
+    organizer.folders = organizer.folders.map(folder => {
+        const uniqueOrder: string[] = []
+        for (const name of folder.order) {
+            if (!existingNames.has(name) || seen.has(name)) continue
+            if (!uniqueOrder.includes(name)) {
+                uniqueOrder.push(name)
+                seen.add(name)
+            }
+        }
+        return {
+            ...folder,
+            collapsed: folder.collapsed ?? true,
+            coverPath: folder.coverPath || '',
+            order: uniqueOrder
+        }
+    })
+
+    organizer.ungroupedOrder = organizer.ungroupedOrder.filter(name => {
+        if (!existingNames.has(name) || seen.has(name)) return false
+        seen.add(name)
+        return true
+    })
+
+    for (const template of templates) {
+        if (!seen.has(template.name)) {
+            organizer.ungroupedOrder.push(template.name)
+            seen.add(template.name)
+        }
+    }
+
+    organizer.templateCovers = organizer.templateCovers || {}
+    templateOrganizer.value[uid] = organizer
+}
+
+const syncTemplateOrganizer = () => {
+    for (const userTemplate of userTemplates.value) {
+        sanitizeUserOrganizer(userTemplate.user.uid, userTemplate.templates)
+    }
+    saveTemplateOrganizer()
+}
+
+const getTemplateSortMode = (uid: number): SortMode => getUserOrganizer(uid).sortMode
+
+const updateTemplateSortMode = (uid: number, mode: string) => {
+    const organizer = getUserOrganizer(uid)
+    organizer.sortMode = mode === 'az' ? 'az' : 'manual'
+    saveTemplateOrganizer()
+}
+
+const selectTemplateCover = async (uid: number, templateName: string) => {
+    try {
+        const selected = await open({
+            multiple: false,
+            defaultPath: getDefaultCoverDir() || undefined,
+            filters: [
+                {
+                    name: 'Image',
+                    extensions: ['jpg', 'jpeg', 'png', 'pjp', 'pjpeg', 'jiff', 'gif']
+                }
+            ]
+        })
+        if (!selected || selected.length === 0) {
+            utilsStore.showMessage('未选择任何封面文件', 'warning')
+            return
+        }
+        const path = Array.isArray(selected) ? selected[0] : selected
+        const storedPath = await invoke<string>('store_local_cover', {
+            uid,
+            key: templateName,
+            sourcePath: path,
+            isFolder: false
+        })
+        await stat(storedPath)
+        setTemplateCoverPath(uid, templateName, storedPath)
+        const folder = path.split(/[/\\]/).slice(0, -1).join('\\')
+        if (folder) setDefaultCoverDir(folder)
+        await utilsStore.log(
+            'log',
+            `模板封面已更新: uid=${uid}, template=${templateName}, path=${storedPath}`
+        )
+        utilsStore.showMessage('模板封面已更新', 'success')
+    } catch (error) {
+        console.error('模板封面选择失败:', error)
+        utilsStore.showMessage(`模板封面选择失败: ${error}`, 'error')
+    }
+}
+
+const selectFolderCover = async (uid: number, folderId: string) => {
+    try {
+        const selected = await open({
+            multiple: false,
+            defaultPath: getDefaultCoverDir() || undefined,
+            filters: [
+                {
+                    name: 'Image',
+                    extensions: ['jpg', 'jpeg', 'png', 'pjp', 'pjpeg', 'jiff', 'gif']
+                }
+            ]
+        })
+        if (!selected || selected.length === 0) {
+            utilsStore.showMessage('未选择任何封面文件', 'warning')
+            return
+        }
+        const path = Array.isArray(selected) ? selected[0] : selected
+        const storedPath = await invoke<string>('store_local_cover', {
+            uid,
+            key: folderId,
+            sourcePath: path,
+            isFolder: true
+        })
+        await stat(storedPath)
+        setFolderCoverPath(uid, folderId, storedPath)
+        const folder = path.split(/[/\\]/).slice(0, -1).join('\\')
+        if (folder) setDefaultCoverDir(folder)
+        await utilsStore.log(
+            'log',
+            `模板夹封面已更新: uid=${uid}, folder=${folderId}, path=${storedPath}`
+        )
+        utilsStore.showMessage('模板夹封面已更新', 'success')
+    } catch (error) {
+        console.error('模板夹封面选择失败:', error)
+        utilsStore.showMessage(`模板夹封面选择失败: ${error}`, 'error')
+    }
+}
+
+const DEFAULT_COVER_DIR_KEY = 'default-cover-dir'
+const DEFAULT_VIDEO_DIR_KEY = 'default-video-dir'
+
+const getDefaultCoverDir = () => localStorage.getItem(DEFAULT_COVER_DIR_KEY) || ''
+const setDefaultCoverDir = (path: string) =>
+    localStorage.setItem(DEFAULT_COVER_DIR_KEY, path)
+const getDefaultVideoDir = () => localStorage.getItem(DEFAULT_VIDEO_DIR_KEY) || ''
+const setDefaultVideoDir = (path: string) =>
+    localStorage.setItem(DEFAULT_VIDEO_DIR_KEY, path)
+
+const sortTemplates = (
+    templates: Array<{ name: string; config: TemplateConfig }>,
+    mode: SortMode
+) => {
+    if (mode === 'az') {
+        return [...templates].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    }
+    return templates
+}
+
+const getDefaultTemplateCover = () =>
+    localStorage.getItem(TEMPLATE_COVER_DEFAULT_KEY) || DEFAULT_TEMPLATE_COVER
+
+const getDefaultFolderCover = () =>
+    localStorage.getItem(FOLDER_COVER_DEFAULT_KEY) || DEFAULT_FOLDER_COVER
+
+const normalizeCoverPath = (coverPath?: string) => {
+    if (!coverPath) return ''
+    if (coverPath.startsWith('file:///')) {
+        return decodeURIComponent(coverPath.replace('file:///', ''))
+    }
+    if (coverPath.startsWith('file://')) {
+        return decodeURIComponent(coverPath.replace('file://', ''))
+    }
+    return coverPath
+}
+
+const guessMimeType = (filePath: string) => {
+    const lower = filePath.toLowerCase()
+    if (lower.endsWith('.png')) return 'image/png'
+    if (lower.endsWith('.webp')) return 'image/webp'
+    if (lower.endsWith('.gif')) return 'image/gif'
+    return 'image/jpeg'
+}
+
+const toDataUrlFromPath = async (filePath: string) => {
+    const bytes = await readFile(filePath)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.slice(i, i + chunkSize)
+        binary += String.fromCharCode(...chunk)
+    }
+    const base64 = btoa(binary)
+    return `data:${guessMimeType(filePath)};base64,${base64}`
+}
+
+const bumpCoverVersion = (coverPath?: string) => {
+    const normalized = normalizeCoverPath(coverPath)
+    if (!normalized) return
+    coverVersionMap.value[normalized] = Date.now()
+}
+
+const resolveCoverSrc = (coverPath: string | undefined, fallbackType: 'template' | 'folder') => {
+    const normalized = normalizeCoverPath(coverPath)
+    if (!normalized) {
+        return fallbackType === 'template' ? getDefaultTemplateCover() : getDefaultFolderCover()
+    }
+    if (
+        normalized.startsWith('http://') ||
+        normalized.startsWith('https://') ||
+        normalized.startsWith('data:')
+    ) {
+        return normalized
+    }
+    const normalizedForTauri = normalized.replace(/\\/g, '/')
+    const src = convertFileSrc(normalizedForTauri)
+    const version = coverVersionMap.value[normalized]
+    return version ? `${src}?v=${version}` : src
+}
+
+const getTemplateCoverPath = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    return organizer.templateCovers?.[templateName] || ''
+}
+
+const setTemplateCoverPath = (uid: number, templateName: string, coverPath: string) => {
+    const organizer = getUserOrganizer(uid)
+    organizer.templateCovers = organizer.templateCovers || {}
+    organizer.templateCovers[templateName] = coverPath
+    bumpCoverVersion(coverPath)
+    saveTemplateOrganizer()
+}
+
+const clearTemplateCoverPath = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    if (organizer.templateCovers && organizer.templateCovers[templateName]) {
+        const oldPath = organizer.templateCovers[templateName]
+        delete organizer.templateCovers[templateName]
+        bumpCoverVersion(oldPath)
+        saveTemplateOrganizer()
+    }
+}
+
+const getFolderCoverPath = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    return folder?.coverPath || ''
+}
+
+const setFolderCoverPath = (uid: number, folderId: string, coverPath: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+    folder.coverPath = coverPath
+    bumpCoverVersion(coverPath)
+    saveTemplateOrganizer()
+}
+
+const clearFolderCoverPath = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+    const oldPath = folder.coverPath
+    folder.coverPath = ''
+    bumpCoverVersion(oldPath)
+    saveTemplateOrganizer()
+}
+
+const handleCoverError = async (
+    event: Event,
+    coverPath: string | undefined,
+    fallbackType: 'template' | 'folder'
+) => {
+    const target = event.target as HTMLImageElement
+    const normalized = normalizeCoverPath(coverPath)
+    if (normalized) {
+        try {
+            const dataUrl = await toDataUrlFromPath(normalized)
+            target.src = dataUrl
+            return
+        } catch (error) {
+            await utilsStore.log(
+                'error',
+                `封面读取失败，回退默认封面: path=${normalized}, error=${JSON.stringify(error)}`
+            )
+        }
+    }
+    target.src = fallbackType === 'template' ? getDefaultTemplateCover() : getDefaultFolderCover()
+}
+
+const toggleFolderCollapsed = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+    folder.collapsed = !folder.collapsed
+    saveTemplateOrganizer()
+}
+
+const isFolderCollapsed = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    return folder?.collapsed ?? true
+}
+
+const getTemplateRenderItems = (
+    uid: number,
+    templates: Array<{ name: string; config: TemplateConfig }>
+): TemplateRenderItem[] => {
+    const organizer = getUserOrganizer(uid)
+    const byName = new Map(templates.map(template => [template.name, template]))
+    const mode = organizer.sortMode
+    const items: TemplateRenderItem[] = []
+
+    organizer.folders.forEach(folder => {
+        const folderTemplates = folder.order
+            .map(name => byName.get(name))
+            .filter((template): template is { name: string; config: TemplateConfig } => !!template)
+        const finalFolderTemplates = sortTemplates(folderTemplates, mode)
+        if (finalFolderTemplates.length === 0) return
+
+        items.push({
+            kind: 'folder',
+            id: `folder-${folder.id}`,
+            folderId: folder.id,
+            name: folder.name,
+            count: finalFolderTemplates.length
+        })
+
+        if (!folder.collapsed) {
+            finalFolderTemplates.forEach(template => {
+                items.push({
+                    kind: 'template',
+                    id: `template-${folder.id}-${template.name}`,
+                    folderId: folder.id,
+                    template
+                })
+            })
+        }
+    })
+
+    const ungroupedTemplates = organizer.ungroupedOrder
+        .map(name => byName.get(name))
+        .filter((template): template is { name: string; config: TemplateConfig } => !!template)
+    const finalUngroupedTemplates = sortTemplates(ungroupedTemplates, mode)
+
+    finalUngroupedTemplates.forEach(template => {
+        items.push({
+            kind: 'template',
+            id: `template-root-${template.name}`,
+            template
+        })
+    })
+
+    return items
+}
+
+const createTemplateFolder = async (uid: number): Promise<string | null> => {
+    try {
+        const { value } = await ElMessageBox.prompt('请输入模板夹名称', '新建模板夹', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            inputPlaceholder: '例如：翻唱、游戏实况、投稿备份'
+        })
+        const folderName = value.trim()
+        if (!folderName) {
+            utilsStore.showMessage('模板夹名称不能为空', 'error')
+            return null
+        }
+        const organizer = getUserOrganizer(uid)
+        if (organizer.folders.some(folder => folder.name === folderName)) {
+            utilsStore.showMessage('模板夹名称已存在', 'error')
+            return null
+        }
+        const folderId = uuidv4()
+        organizer.folders.push({
+            id: folderId,
+            name: folderName,
+            order: [],
+            collapsed: true,
+            coverPath: ''
+        })
+        saveTemplateOrganizer()
+        utilsStore.showMessage('模板夹创建成功', 'success')
+        return folderId
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('新建模板夹失败:', error)
+            utilsStore.showMessage(`新建模板夹失败: ${error}`, 'error')
+        }
+    }
+    return null
+}
+
+const renameTemplateFolder = async (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+
+    try {
+        const { value } = await ElMessageBox.prompt('请输入新的模板夹名称', '重命名模板夹', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            inputPlaceholder: '请输入模板夹名称',
+            inputValue: folder.name
+        })
+        const newName = value.trim()
+        if (!newName) {
+            utilsStore.showMessage('模板夹名称不能为空', 'error')
+            return
+        }
+        if (organizer.folders.some(item => item.name === newName && item.id !== folderId)) {
+            utilsStore.showMessage('模板夹名称已存在', 'error')
+            return
+        }
+        folder.name = newName
+        saveTemplateOrganizer()
+        utilsStore.showMessage('模板夹重命名成功', 'success')
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('重命名模板夹失败:', error)
+            utilsStore.showMessage(`重命名模板夹失败: ${error}`, 'error')
+        }
+    }
+}
+
+const deleteTemplateFolder = async (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+
+    try {
+        await ElMessageBox.confirm(
+            `删除模板夹 "${folder.name}" 后，模板会移回未分组列表，是否继续？`,
+            '删除模板夹',
+            {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+            }
+        )
+
+        organizer.ungroupedOrder.push(...folder.order.filter(name => !organizer.ungroupedOrder.includes(name)))
+        organizer.folders = organizer.folders.filter(item => item.id !== folderId)
+        saveTemplateOrganizer()
+        utilsStore.showMessage('模板夹已删除', 'success')
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('删除模板夹失败:', error)
+            utilsStore.showMessage(`删除模板夹失败: ${error}`, 'error')
+        }
+    }
+}
+
+const openMoveDialog = (uid: number, templateName: string, folderId?: string) => {
+    moveDialogUserUid.value = uid
+    moveDialogTemplateName.value = templateName
+    moveDialogTemplateFolderId.value = folderId || null
+    moveDialogTargetFolderId.value = folderId || ''
+    moveDialogVisible.value = true
+}
+
+const confirmMoveDialog = async () => {
+    if (!moveDialogUserUid.value || !moveDialogTemplateName.value) {
+        moveDialogVisible.value = false
+        return
+    }
+
+    const uid = moveDialogUserUid.value
+    const templateName = moveDialogTemplateName.value
+    const organizer = getUserOrganizer(uid)
+
+    removeTemplateFromOrganizer(uid, templateName)
+
+    if (!moveDialogTargetFolderId.value) {
+        organizer.ungroupedOrder.push(templateName)
+    } else {
+        const targetFolder = organizer.folders.find(
+            folder => folder.id === moveDialogTargetFolderId.value
+        )
+        if (targetFolder) {
+            targetFolder.order.push(templateName)
+        } else {
+            organizer.ungroupedOrder.push(templateName)
+        }
+    }
+    saveTemplateOrganizer()
+    utilsStore.showMessage('模板移动成功', 'success')
+    moveDialogVisible.value = false
+}
+
+const createFolderFromMoveDialog = async () => {
+    if (!moveDialogUserUid.value) return
+    const newFolderId = await createTemplateFolder(moveDialogUserUid.value)
+    if (newFolderId) {
+        moveDialogTargetFolderId.value = newFolderId
+    }
+}
+
+const moveTemplateToRoot = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    removeTemplateFromOrganizer(uid, templateName)
+    organizer.ungroupedOrder.push(templateName)
+    saveTemplateOrganizer()
+    utilsStore.showMessage('模板已移出模板夹', 'success')
+}
+
+const moveTemplatePosition = (uid: number, templateName: string, direction: 'up' | 'down') => {
+    const organizer = getUserOrganizer(uid)
+    organizer.sortMode = 'manual'
+
+    const folder = organizer.folders.find(item => item.order.includes(templateName))
+    const order = folder ? folder.order : organizer.ungroupedOrder
+    const index = order.indexOf(templateName)
+    if (index < 0) return
+    const target = direction === 'up' ? index - 1 : index + 1
+    if (target < 0 || target >= order.length) return
+
+    ;[order[index], order[target]] = [order[target], order[index]]
+    saveTemplateOrganizer()
+}
 
 // 获取当前模板的自动提交状态
 const getCurrentAutoSubmitting = computed(() => {
@@ -1538,6 +2439,8 @@ const forwardConsole = (fnName: keyof Console, logger: (level: string, ...args: 
 }
 
 onMounted(async () => {
+    loadTemplateOrganizer()
+    loadSidebarWidth()
     await initializeData()
     await setupDragAndDrop()
     keyboardCleanup = await setupKeyboardShortcuts()
@@ -1550,6 +2453,12 @@ onMounted(async () => {
     document.addEventListener('contextmenu', (event: MouseEvent) => {
         event.preventDefault()
     })
+
+    const onResize = () => {
+        sidebarWidth.value = clampSidebarWidth(sidebarWidth.value)
+    }
+    window.addEventListener('resize', onResize)
+    sidebarResizeCleanup = () => window.removeEventListener('resize', onResize)
 })
 
 // 在组件卸载时清理
@@ -1569,6 +2478,11 @@ onUnmounted(() => {
         generalUpdateTimer = null
     }
 
+    if (sidebarResizeCleanup) {
+        sidebarResizeCleanup()
+        sidebarResizeCleanup = null
+    }
+
     // 清理所有自动提交状态
     autoSubmittingRecord.value = {}
 })
@@ -1585,6 +2499,7 @@ const initializeData = async () => {
             await utilsStore.initTypeList(loginUsers.value[0].uid)
             await utilsStore.initTopicList(loginUsers.value[0].uid)
             await userConfigStore.buildUserTemplates(loginUsers.value)
+            syncTemplateOrganizer()
             await uploadStore.getUploadQueue()
             if (!generalUpdateTimer) {
                 generalUpdateTimer = setInterval(() => {
@@ -1621,6 +2536,18 @@ const initializeData = async () => {
         utilsStore.showMessage(`'初始化数据失败: ${error}'`, 'error')
     }
 }
+
+watch(
+    () =>
+        userTemplates.value.map(userTemplate => ({
+            uid: userTemplate.user.uid,
+            templates: userTemplate.templates.map(template => template.name).sort()
+        })),
+    () => {
+        syncTemplateOrganizer()
+    },
+    { deep: true }
+)
 
 const hasUnsavedChanges = (
     baseTemplateData: TemplateConfig,
@@ -2040,6 +2967,14 @@ const addVideoToCurrentForm = async (videoPath: string) => {
         return 0
     }
 
+    let fileMtime = 0
+    try {
+        const fileInfo = await stat(videoPath)
+        fileMtime = fileInfo.mtime ? fileInfo.mtime.getTime() : 0
+    } catch (error) {
+        console.warn('读取视频文件修改时间失败:', error)
+    }
+
     // 添加到currentForm.videos
     const videoId = uuidv4()
     currentForm.value.videos.push({
@@ -2048,7 +2983,8 @@ const addVideoToCurrentForm = async (videoPath: string) => {
         title: videoNameWOExtension, // 去除扩展名作为标题
         desc: '',
         path: videoPath, // 保存完整路径
-        complete: false
+        complete: false,
+        mtime: fileMtime
     })
 
     // 标题为空时，自动使用本次导入的第一个视频文件名（去扩展名）作为标题
@@ -2411,12 +3347,31 @@ const loadTemplate = async () => {
 }
 
 // 处理模板命令
-const handleTemplateCommand = async (command: string, user: any, template: any) => {
+const handleTemplateCommand = async (
+    command: string,
+    user: any,
+    template: any,
+    folderId?: string
+) => {
     switch (command) {
         case 'duplicate':
             try {
                 const newName = `${template.name}_副本`
                 await userConfigStore.duplicateUserTemplate(user.uid, template.name, newName)
+                const organizer = getUserOrganizer(user.uid)
+                if (folderId) {
+                    const folder = organizer.folders.find(item => item.id === folderId)
+                    if (folder) {
+                        if (!folder.order.includes(newName)) {
+                            folder.order.push(newName)
+                        }
+                    } else {
+                        ensureTemplateInOrganizer(user.uid, newName)
+                    }
+                } else {
+                    ensureTemplateInOrganizer(user.uid, newName)
+                }
+                saveTemplateOrganizer()
                 utilsStore.showMessage('模板复制成功', 'success')
             } catch (error) {
                 console.error('复制模板失败: ', error)
@@ -2467,6 +3422,18 @@ const handleTemplateCommand = async (command: string, user: any, template: any) 
 
                 // 再删除原模板
                 await userConfigStore.removeUserTemplate(user.uid, template.name)
+                const organizer = getUserOrganizer(user.uid)
+                const sourceFolder = organizer.folders.find(folder =>
+                    folder.order.includes(template.name)
+                )
+                removeTemplateFromOrganizer(user.uid, template.name)
+                removeTemplateFromOrganizer(user.uid, trimmedName)
+                if (sourceFolder) {
+                    sourceFolder.order.push(trimmedName)
+                } else {
+                    organizer.ungroupedOrder.push(trimmedName)
+                }
+                saveTemplateOrganizer()
 
                 // 更新当前选择
                 if (
@@ -2497,6 +3464,8 @@ const handleTemplateCommand = async (command: string, user: any, template: any) 
                 })
 
                 await userConfigStore.removeUserTemplate(user.uid, template_name)
+                removeTemplateFromOrganizer(user.uid, template_name)
+                saveTemplateOrganizer()
 
                 // 如果删除的是当前选中的模板，清空选择
                 if (
@@ -2517,6 +3486,31 @@ const handleTemplateCommand = async (command: string, user: any, template: any) 
                 }
             }
             break
+
+        case 'move':
+            openMoveDialog(user.uid, template.name, folderId)
+            break
+
+        case 'move_root':
+            moveTemplateToRoot(user.uid, template.name)
+            break
+
+        case 'set_cover':
+            await selectTemplateCover(user.uid, template.name)
+            break
+
+        case 'clear_cover':
+            clearTemplateCoverPath(user.uid, template.name)
+            utilsStore.showMessage('已清除模板封面', 'success')
+            break
+
+        case 'move_up':
+            moveTemplatePosition(user.uid, template.name, 'up')
+            break
+
+        case 'move_down':
+            moveTemplatePosition(user.uid, template.name, 'down')
+            break
     }
 }
 
@@ -2529,6 +3523,13 @@ const handleTemplateCreated = async (userUid: number, templateName: string) => {
     // 自动选择新创建的模板
     const targetUser = loginUsers.value.find(user => user.uid === userUid)
     if (targetUser) {
+        ensureTemplateInOrganizer(userUid, templateName)
+        saveTemplateOrganizer()
+        console.log(
+            `模板创建事件: uid=${userUid}, template=${templateName}, organizer=${JSON.stringify(
+                getUserOrganizer(userUid)
+            )}`
+        )
         selectedUser.value = targetUser
         currentTemplateName.value = templateName
 
@@ -2617,6 +3618,7 @@ const selectCoverWithTauri = async () => {
     try {
         const selected = await open({
             multiple: false,
+            defaultPath: getDefaultCoverDir() || undefined,
             filters: [
                 {
                     name: 'Image',
@@ -2640,6 +3642,9 @@ const selectCoverWithTauri = async () => {
             } else {
                 throw new Error('封面上传失败')
             }
+            const coverPath = Array.isArray(selected) ? selected[0] : selected
+            const folder = coverPath.split(/[/\\]/).slice(0, -1).join('\\')
+            if (folder) setDefaultCoverDir(folder)
         } else {
             utilsStore.showMessage('请先选择用户和模板', 'error')
         }
@@ -2680,6 +3685,7 @@ const selectVideoWithTauri = async () => {
     try {
         const selected = await open({
             multiple: true,
+            defaultPath: getDefaultVideoDir() || undefined,
             filters: [
                 {
                     name: 'Video',
@@ -2705,14 +3711,25 @@ const selectVideoWithTauri = async () => {
         var added = 0
 
         if (selected && Array.isArray(selected)) {
-            for (const videoPath of selected) {
+            const selectedPaths = selected as string[]
+            for (const videoPath of selectedPaths) {
                 added += await addVideoToCurrentForm(videoPath)
             }
 
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
+            if (selectedPaths.length > 0) {
+                const firstPath = selectedPaths[0] ? String(selectedPaths[0]) : ''
+                const folder = firstPath
+                    ? firstPath.split(/[/\\]/).slice(0, -1).join('\\')
+                    : ''
+                if (folder) setDefaultVideoDir(folder)
+            }
         } else if (typeof selected === 'string') {
-            added += await addVideoToCurrentForm(selected)
+            const selectedPath = String(selected)
+            added += await addVideoToCurrentForm(selectedPath)
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
+            const folder = selectedPath.split(/[/\\]/).slice(0, -1).join('\\')
+            if (folder) setDefaultVideoDir(folder)
         }
     } catch (error) {
         console.error('文件选择失败: ', error)
@@ -3112,8 +4129,24 @@ const refreshAllData = async () => {
 // 导出日志
 const exportLogs = async () => {
     try {
-        const zipPath = await utilsStore.exportLogs()
-        const zipName = zipPath.split(/[/\\]/).pop() || zipPath
+        const now = new Date()
+        const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+            now.getDate()
+        ).padStart(2, '0')}`
+        const { value: selectedDate } = await ElMessageBox.prompt(
+            '请输入日志日期（YYYY-MM-DD），留空表示全部日志',
+            '导出日志',
+            {
+                confirmButtonText: '下一步',
+                cancelButtonText: '取消',
+                inputPlaceholder: '例如 2026-03-23',
+                inputValue: localDate
+            }
+        )
+        const dateFilter = selectedDate?.trim()
+        const zipName = dateFilter
+            ? `logs_export_${dateFilter.replace(/-/g, '')}.zip`
+            : `logs_export_${localDate.replace(/-/g, '')}.zip`
 
         const savePath = await save({
             defaultPath: zipName,
@@ -3121,13 +4154,13 @@ const exportLogs = async () => {
         })
 
         if (savePath) {
-            // 复制 ZIP 文件到用户指定位置
-            await copyFile(zipPath, savePath)
-            await remove(zipPath)
-            console.log('文件已保存到：', savePath)
+            await utilsStore.exportLogs(savePath, dateFilter || undefined)
+            console.log('日志导出成功：', savePath)
         }
     } catch (error) {
-        console.error('导出日志失败:', error)
+        if (error !== 'cancel') {
+            console.error('导出日志失败:', error)
+        }
     }
 }
 
@@ -3244,7 +4277,28 @@ const checkUpdate = async () => {
     padding: 20px;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: auto;
+    width: 320px;
+    min-width: 280px;
+    max-width: 60vw;
+    flex: 0 0 auto;
+}
+
+.sidebar-resizer {
+    width: 8px;
+    cursor: col-resize;
+    background: linear-gradient(to right, transparent 0, #e5e7eb 50%, transparent 100%);
+    user-select: none;
+    flex: 0 0 8px;
+}
+
+.sidebar-resizer:hover {
+    background: linear-gradient(to right, transparent 0, #cbd5e1 50%, transparent 100%);
+}
+
+body.sidebar-resizing {
+    cursor: col-resize !important;
+    user-select: none;
 }
 
 .sidebar-content {
@@ -3408,6 +4462,77 @@ const checkUpdate = async () => {
     margin-left: 20px;
     margin-top: 10px;
     position: relative;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 8px;
+    align-items: start;
+}
+
+.template-tools {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    grid-column: 1 / -1;
+}
+
+.template-sort-select {
+    width: 130px;
+}
+
+.template-entry {
+    min-width: 0;
+}
+
+.template-entry.entry-folder {
+    grid-column: 1 / -1;
+}
+
+.template-folder-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 8px 0 4px;
+    padding: 0 6px;
+    color: #606266;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.template-folder-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.template-folder-cover {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid #e5e7eb;
+    background: #f5f7fa;
+    flex-shrink: 0;
+}
+
+.template-folder-title {
+    font-weight: 600;
+}
+
+.template-folder-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.folder-toggle-icon {
+    transition: transform 0.2s ease;
+    color: #909399;
+}
+
+.folder-toggle-icon.collapsed {
+    transform: rotate(-90deg);
 }
 
 .template-item {
@@ -3419,6 +4544,40 @@ const checkUpdate = async () => {
     margin-bottom: 5px;
     cursor: pointer;
     transition: all 0.3s;
+    position: relative;
+    min-width: 0;
+}
+
+.template-item-in-folder {
+    margin-left: 10px;
+}
+
+.template-cover {
+    width: 48px;
+    height: 48px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid #e5e7eb;
+    background: #f5f7fa;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+.move-dialog-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.move-dialog-select {
+    flex: 1;
+}
+
+.empty-folder {
+    margin-top: 8px;
+    color: #909399;
+    font-size: 12px;
+    text-align: center;
 }
 
 .template-item:hover {
@@ -3618,6 +4777,7 @@ const checkUpdate = async () => {
 
 .template-main {
     flex: 1;
+    min-width: 0;
 }
 
 .template-name {
@@ -3626,6 +4786,9 @@ const checkUpdate = async () => {
     display: flex;
     align-items: center;
     gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .unsaved-indicator {
@@ -3656,6 +4819,9 @@ const checkUpdate = async () => {
     font-size: 12px;
     color: #909399;
     margin-top: 2px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .main-content {

@@ -286,6 +286,11 @@ const createTemplateFromBV = async (
         }
 
         await userConfigStore.addUserTemplate(userUid, templateName, newTemplate)
+        console.log(
+            `BV模板添加完成: uid=${userUid}, template=${templateName}, videos=${
+                Array.isArray(newTemplate.videos) ? newTemplate.videos.length : 0
+            }`
+        )
     } catch (error) {
         console.error('从BV号创建模板失败: ', error)
         utilsStore.showMessage(`从BV号创建模板失败: ${error}`, 'error')
