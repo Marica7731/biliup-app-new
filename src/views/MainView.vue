@@ -281,20 +281,16 @@
                                                 currentTemplateName === item.template.name,
                                             'auto-submitting':
                                                 highlightAutoSubmitting &&
-                                                autoSubmittingRecord[
-                                                    getTemplateKey(
-                                                        userTemplate.user.uid,
-                                                        item.template.name
-                                                    )
-                                                ],
+                                                isTemplateAutoSubmitting(
+                                                    userTemplate.user.uid,
+                                                    item.template.name
+                                                ),
                                             'auto-submitting-simple':
                                                 !highlightAutoSubmitting &&
-                                                autoSubmittingRecord[
-                                                    getTemplateKey(
-                                                        userTemplate.user.uid,
-                                                        item.template.name
-                                                    )
-                                                ],
+                                                isTemplateAutoSubmitting(
+                                                    userTemplate.user.uid,
+                                                    item.template.name
+                                                ),
                                             'template-loading':
                                                 templateLoading &&
                                                 selectedUser?.uid === userTemplate.user.uid &&
@@ -523,6 +519,7 @@
                                 <template #label>
                                     <span
                                         class="editor-tab-label"
+                                        :class="{ 'auto-submit-tab': isSessionAutoSubmitting(session.id) }"
                                         @mousedown.middle.prevent
                                         @mouseup="event => handleTabLabelMouseup(event, session.id)"
                                     >
@@ -1457,9 +1454,6 @@ watch(
     }
 )
 
-// 生成模板键名
-const getTemplateKey = (uid: number, templateName: string) => `${uid}-${templateName}`
-
 const TEMPLATE_ORGANIZER_KEY = 'template-organizer-v1'
 const TEMPLATE_COVER_DEFAULT_KEY = 'template-cover-default'
 const FOLDER_COVER_DEFAULT_KEY = 'folder-cover-default'
@@ -2231,16 +2225,28 @@ const onTemplateDragEnd = () => {
     draggingTemplate.value = null
 }
 
+const isSessionAutoSubmitting = (sessionId: string) => {
+    return !!autoSubmittingRecord.value[sessionId]
+}
+
+const isTemplateAutoSubmitting = (uid: number, templateName: string) => {
+    return editSessions.value.some(
+        session =>
+            session.uid === uid &&
+            session.templateName === templateName &&
+            !!autoSubmittingRecord.value[session.id]
+    )
+}
+
 // 获取当前模板的自动提交状态
 const getCurrentAutoSubmitting = computed(() => {
-    if (!selectedUser.value || !currentTemplateName.value) return false
-    const key = getTemplateKey(selectedUser.value.uid, currentTemplateName.value)
-    return autoSubmittingRecord.value[key] || false
+    if (!activeSessionId.value) return false
+    return !!autoSubmittingRecord.value[activeSessionId.value]
 })
 
 // 设置模板的自动提交状态
-const setAutoSubmitting = (uid: number, templateName: string, status: boolean) => {
-    const key = getTemplateKey(uid, templateName)
+const setAutoSubmitting = (sessionId: string, status: boolean) => {
+    const key = sessionId
     if (status) {
         autoSubmittingRecord.value[key] = true
     } else {
@@ -2253,42 +2259,50 @@ const hasAnyAutoSubmitting = computed(() => {
     return Object.keys(autoSubmittingRecord.value).length > 0
 })
 
+const isVideoUploadCompleted = (video: any) => {
+    if (!video) return false
+    if (video.complete === true) return true
+    if (video.status === 'Completed') return true
+    const task = uploadStore.getUploadTask(video.id)
+    return task?.status === 'Completed'
+}
+
 // 全局自动提交检查函数
 const checkAutoSubmitAll = async () => {
-    const templateKeys = Object.keys(autoSubmittingRecord.value)
+    const sessionIds = Object.keys(autoSubmittingRecord.value)
 
-    for (const templateKey of templateKeys) {
-        const [uidStr, templateName] = templateKey.split('-', 2)
-        const uid = parseInt(uidStr)
-
-        if (isNaN(uid) || !templateName) continue
-
-        // 获取用户和模板配置
-        const user = loginUsers.value.find(u => u.uid === uid)
-        if (!user || !userConfigStore.configRoot?.config[uid]?.templates[templateName]) {
-            // 如果用户或模板不存在，清除自动提交状态
-            setAutoSubmitting(uid, templateName, false)
+    for (const sessionId of sessionIds) {
+        const session = editSessions.value.find(item => item.id === sessionId)
+        if (!session) {
+            setAutoSubmitting(sessionId, false)
             continue
         }
 
-        const template = userConfigStore.configRoot.config[uid].templates[templateName]
+        const user = loginUsers.value.find(u => u.uid === session.uid)
+        if (!user) {
+            setAutoSubmitting(sessionId, false)
+            continue
+        }
+
+        const template = session.draft
 
         // 检查是否所有文件都已上传完成
         if (template.videos && template.videos.length > 0) {
-            const allUploaded = template.videos.every(video => video.complete && video.path === '')
+            const allUploaded = template.videos.every(video => isVideoUploadCompleted(video))
 
-            if (allUploaded && autoSubmittingRecord.value[templateKey]) {
+            if (allUploaded && autoSubmittingRecord.value[sessionId]) {
                 // 文件已全部上传完成，执行提交
-                setAutoSubmitting(uid, templateName, false)
+                setAutoSubmitting(sessionId, false)
                 try {
-                    await performTemplateSubmit(uid, templateName, template)
+                    console.log(`自动提交触发: ${session.tabTitle}`)
+                    await performTemplateSubmit(session.uid, session.templateName, template)
                 } catch (error) {
-                    console.error(`模板 ${templateKey} 自动提交失败:`, error)
+                    console.error(`标签页 ${session.tabTitle} 自动提交失败:`, error)
                 }
             }
         } else {
             // 没有视频文件，清除自动提交状态
-            setAutoSubmitting(uid, templateName, false)
+            setAutoSubmitting(sessionId, false)
         }
     }
 
@@ -2728,19 +2742,37 @@ const initializeData = async () => {
                         uploadStore.getUploadQueue()
                     }
                     for (const task of uploadStore.uploadQueue) {
-                        if (task.status === 'Completed') {
-                            const templateName = task.template
-                            const uid = task.user.uid
-                            const videos =
-                                userConfigStore.configRoot?.config[uid]?.templates[templateName]
-                                    ?.videos || []
+                        const templateName = task.template
+                        const uid = task.user.uid
 
-                            const video = videos.find(v => v.id === task.video?.id)
-                            if (video && video.filename !== task.video?.filename) {
-                                video.filename = task.video.filename
-                                video.path = task.video.path
+                        const applyTaskToVideo = (video: any) => {
+                            if (!video) return
+                            video.status = task.status || video.status
+                            video.errorMessage = task.error_message || ''
+                            video.totalSize = task.total_size || video.totalSize || 0
+                            video.speed = task.speed || 0
+                            video.progress = task.progress || video.progress || 0
+                            if (task.video?.filename) video.filename = task.video.filename
+                            if (typeof task.video?.cid === 'number') video.cid = task.video.cid
+                            if (task.finished_at) video.finished_at = task.finished_at
+                            if (task.status === 'Completed') {
                                 video.complete = true
-                                video.finished_at = task.finished_at
+                            }
+                        }
+
+                        const configVideos =
+                            userConfigStore.configRoot?.config[uid]?.templates[templateName]
+                                ?.videos || []
+                        const configVideo = configVideos.find(v => v.id === task.video?.id)
+                        if (configVideo) {
+                            applyTaskToVideo(configVideo)
+                        }
+
+                        for (const session of editSessions.value) {
+                            if (session.uid !== uid || session.templateName !== templateName) continue
+                            const sessionVideo = session.draft?.videos?.find(v => v.id === task.video?.id)
+                            if (sessionVideo) {
+                                applyTaskToVideo(sessionVideo)
                             }
                         }
                     }
@@ -3519,6 +3551,7 @@ const closeSessionTab = async (sessionId: string) => {
     }
 
     editSessions.value.splice(index, 1)
+    setAutoSubmitting(sessionId, false)
     if (activeSessionId.value === sessionId) {
         const fallback = editSessions.value[Math.max(0, index - 1)] || editSessions.value[0]
         if (fallback) {
@@ -4300,7 +4333,7 @@ const allFilesUploaded = computed(() => {
     if (!currentForm.value?.videos || currentForm.value.videos.length === 0) {
         return false
     }
-    return currentForm.value.videos.every(video => video.complete && video.path === '')
+    return currentForm.value.videos.every(video => isVideoUploadCompleted(video))
 })
 
 // 提交视频
@@ -4335,12 +4368,18 @@ const submitTemplate = async () => {
                 console.error('添加到上传队列失败:', error)
                 utilsStore.showMessage(`添加到上传队列失败: ${error}`, 'error')
             }
-            setAutoSubmitting(selectedUser.value.uid, currentTemplateName.value, true)
+            if (!activeSessionId.value) {
+                utilsStore.showMessage('当前没有可用的编辑标签页', 'error')
+                return
+            }
+            setAutoSubmitting(activeSessionId.value, true)
             startAutoSubmitCheck()
             utilsStore.showMessage('已启动自动提交，上传完成后将自动提交', 'info')
         } else {
             // 第二次点击，取消自动提交
-            setAutoSubmitting(selectedUser.value.uid, currentTemplateName.value, false)
+            if (activeSessionId.value) {
+                setAutoSubmitting(activeSessionId.value, false)
+            }
             utilsStore.showMessage('已取消自动提交', 'info')
         }
         return
@@ -5278,6 +5317,11 @@ body.sidebar-resizing {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.editor-tab-label.auto-submit-tab {
+    color: #1d4ed8;
+    font-weight: 700;
 }
 
 .template-name-container {

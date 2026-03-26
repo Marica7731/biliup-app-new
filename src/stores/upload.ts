@@ -123,7 +123,21 @@ export const useUploadStore = defineStore('upload', () => {
                 }
                 if (!uploadQueue.value.some(task => task.id === video.id)) {
                     try {
-                        await invoke('create_upload_task', { uid, template, video })
+                        const normalizedVideo = {
+                            ...video,
+                            // 重新入队时清理旧上传态，避免携带历史cid导致提交异常（如21015）
+                            cid: 0,
+                            complete: false,
+                            status: 'Waiting',
+                            errorMessage: '',
+                            progress: 0,
+                            finished_at: 0
+                        }
+                        await invoke('create_upload_task', {
+                            uid,
+                            template,
+                            video: normalizedVideo
+                        })
                         count++
                     } catch (error) {
                         console.error('创建上传任务失败:', error)
