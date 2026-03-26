@@ -219,6 +219,24 @@
             <div class="batch-rename-tip">
                 每行对应一个分 P 名称，按当前列表顺序依次替换。空行会跳过。
             </div>
+            <div class="batch-range-row">
+                <el-checkbox v-model="batchRenameAll">全部分 P</el-checkbox>
+                <el-input-number
+                    v-model="batchRenameStart"
+                    :min="1"
+                    :max="videos?.length || 1"
+                    :disabled="batchRenameAll"
+                    size="small"
+                />
+                <span>到</span>
+                <el-input-number
+                    v-model="batchRenameEnd"
+                    :min="1"
+                    :max="videos?.length || 1"
+                    :disabled="batchRenameAll"
+                    size="small"
+                />
+            </div>
             <el-input
                 v-model="batchRenameText"
                 type="textarea"
@@ -285,6 +303,9 @@ const uploadStore = useUploadStore()
 const showFolderWatchDialog = ref(false)
 const batchRenameVisible = ref(false)
 const batchRenameText = ref('')
+const batchRenameAll = ref(true)
+const batchRenameStart = ref(1)
+const batchRenameEnd = ref(1)
 
 // 模板标题
 const templateTitle = computed(() => props.templateTitle)
@@ -568,6 +589,9 @@ const getVideoDisplayName = (video: any) => {
 
 const openBatchRename = () => {
     batchRenameText.value = ''
+    batchRenameAll.value = true
+    batchRenameStart.value = 1
+    batchRenameEnd.value = props.videos?.length || 1
     batchRenameVisible.value = true
 }
 
@@ -587,11 +611,21 @@ const applyBatchRename = () => {
         return
     }
 
+    const maxIndex = props.videos.length - 1
+    const startIndex = batchRenameAll.value
+        ? 0
+        : Math.min(maxIndex, Math.max(0, batchRenameStart.value - 1))
+    const endIndex = batchRenameAll.value
+        ? maxIndex
+        : Math.min(maxIndex, Math.max(startIndex, batchRenameEnd.value - 1))
+
     const newVideos = props.videos.map((video, index) => {
-        if (index >= lines.length) return video
+        if (index < startIndex || index > endIndex) return video
+        const lineIndex = index - startIndex
+        if (lineIndex >= lines.length) return video
         return {
             ...video,
-            title: lines[index].slice(0, 80)
+            title: lines[lineIndex].slice(0, 80)
         }
     })
 
@@ -934,6 +968,13 @@ const sortVideosByMtime = () => {
     font-size: 12px;
     color: #909399;
     margin-bottom: 8px;
+}
+
+.batch-range-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
 }
 
 .dialog-footer {

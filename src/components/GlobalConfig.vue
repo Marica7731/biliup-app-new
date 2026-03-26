@@ -88,6 +88,28 @@
                     <el-button size="small" @click="clearDefaultVideoDir">清除</el-button>
                 </div>
             </el-form-item>
+            <el-form-item label="模板标签页上限">
+                <div class="slider-container">
+                    <el-slider
+                        v-model="templateTabMax"
+                        :min="3"
+                        :max="30"
+                        :step="1"
+                        show-stops
+                        show-input
+                        :input-size="'small'"
+                    />
+                </div>
+                <div class="form-tip">默认 15，可按需要调整</div>
+            </el-form-item>
+            <el-form-item label="封面缩略图大小">
+                <el-radio-group v-model="templateCoverSize">
+                    <el-radio-button :value="48">小</el-radio-button>
+                    <el-radio-button :value="64">中</el-radio-button>
+                    <el-radio-button :value="80">大</el-radio-button>
+                </el-radio-group>
+                <div class="form-tip">建议使用“小”以提升模板列表加载速度</div>
+            </el-form-item>
 
             <!-- 用户配置分类标签 -->
             <el-divider content-position="left">
@@ -285,6 +307,12 @@ const saving = ref(false)
 const includeCookie = ref(true)
 const defaultCoverDir = ref(localStorage.getItem('default-cover-dir') || '')
 const defaultVideoDir = ref(localStorage.getItem('default-video-dir') || '')
+const templateTabMax = ref(
+    Number.parseInt(localStorage.getItem('template-tab-max') || '15', 10) || 15
+)
+const templateCoverSize = ref(
+    Number.parseInt(localStorage.getItem('template-cover-size') || '48', 10) || 48
+)
 
 // 用户配置相关
 const selectedUserUid = ref<number | null>(null)
@@ -372,6 +400,11 @@ watch(
 const loadGlobalConfig = async () => {
     loading.value = true
     try {
+        templateTabMax.value =
+            Number.parseInt(localStorage.getItem('template-tab-max') || '15', 10) || 15
+        templateCoverSize.value =
+            Number.parseInt(localStorage.getItem('template-cover-size') || '48', 10) || 48
+
         // 确保配置已加载
         if (!userConfigStore.configRoot) {
             await userConfigStore.loadConfig()
@@ -446,6 +479,12 @@ const handleSave = async () => {
             // 保存配置
             await userConfigStore.updateUserConfig(selectedUserUid.value, userConfig)
         }
+
+        localStorage.setItem('template-tab-max', String(Math.min(30, Math.max(3, templateTabMax.value))))
+        localStorage.setItem(
+            'template-cover-size',
+            String([48, 64, 80].includes(templateCoverSize.value) ? templateCoverSize.value : 48)
+        )
 
         utilsStore.showMessage('配置保存成功', 'success')
         emit('config-updated')

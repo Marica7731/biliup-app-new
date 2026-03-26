@@ -305,12 +305,45 @@
                                         @click="
                                             handleTemplateSelection(
                                                 userTemplate.user,
-                                                item.template.name
+                                                item.template.name,
+                                                $event
+                                            )
+                                        "
+                                        :draggable="
+                                            isTemplateDragEnabled(
+                                                userTemplate.user.uid,
+                                                userTemplate.user.expired
+                                            )
+                                        "
+                                        @dragstart="
+                                            onTemplateDragStart(
+                                                $event,
+                                                userTemplate.user.uid,
+                                                item.template.name,
+                                                item.folderId
+                                            )
+                                        "
+                                        @dragend="onTemplateDragEnd"
+                                        @dragover.prevent="
+                                            onTemplateDragOver(
+                                                $event,
+                                                userTemplate.user.uid,
+                                                item.template.name,
+                                                item.folderId
+                                            )
+                                        "
+                                        @drop.prevent="
+                                            onTemplateDrop(
+                                                $event,
+                                                userTemplate.user.uid,
+                                                item.template.name,
+                                                item.folderId
                                             )
                                         "
                                     >
                                         <img
                                             class="template-cover"
+                                            :style="templateCoverStyle"
                                             :src="
                                                 resolveCoverSrc(
                                                     getTemplateCoverPath(
@@ -361,10 +394,17 @@
                                                     )
                                             "
                                             @click.stop
+                                            @mousedown.stop
                                             trigger="click"
                                             :disabled="templateLoading"
                                         >
-                                            <el-button link size="small" class="template-menu-btn">
+                                            <el-button
+                                                link
+                                                size="small"
+                                                class="template-menu-btn"
+                                                @click.stop
+                                                @mousedown.stop
+                                            >
                                                 <el-icon><more-filled /></el-icon>
                                             </el-button>
                                             <template #dropdown>
@@ -452,7 +492,7 @@
             ></div>
 
             <!-- 主要内容区域 -->
-            <el-main class="main-content" v-if="currentForm">
+            <el-main class="main-content">
                 <div class="content-wrapper" ref="contentWrapperRef">
                     <div v-if="!selectedUser" class="no-selection">
                         <el-empty description="请选择用户和模板开始使用" />
@@ -466,7 +506,31 @@
                         </el-empty>
                     </div>
 
-                    <div v-else class="upload-form-container">
+                    <div v-else-if="currentForm" class="upload-form-container">
+                        <el-tabs
+                            v-model="activeSessionId"
+                            type="card"
+                            class="editor-tabs"
+                            closable
+                            @tab-remove="closeSessionTab"
+                            @tab-click="handleSessionTabClick"
+                        >
+                            <el-tab-pane
+                                v-for="session in editSessions"
+                                :key="session.id"
+                                :name="session.id"
+                            >
+                                <template #label>
+                                    <span
+                                        class="editor-tab-label"
+                                        @mousedown.middle.prevent
+                                        @mouseup="event => handleTabLabelMouseup(event, session.id)"
+                                    >
+                                        {{ session.tabTitle }}
+                                    </span>
+                                </template>
+                            </el-tab-pane>
+                        </el-tabs>
                         <div class="form-header">
                             <div class="template-name-container">
                                 <h3 class="edit-bv-template-disaplay" v-if="currentTemplate?.aid">
@@ -1165,6 +1229,9 @@
                             </div>
                         </el-form>
                     </div>
+                    <div v-else class="no-template">
+                        <el-empty description="当前标签页草稿不可用，请重新打开模板" />
+                    </div>
                 </div>
             </el-main>
         </el-container>
@@ -1323,6 +1390,17 @@ interface TemplateRenderItemTemplate {
 
 type TemplateRenderItem = TemplateRenderItemFolder | TemplateRenderItemTemplate
 
+interface TemplateEditSession {
+    id: string
+    uid: number
+    username: string
+    templateName: string
+    tabTitle: string
+    createdAt: number
+    updatedAt: number
+    draft: TemplateConfig
+}
+
 // 计算属性
 const loginUsers = computed(() => authStore.loginUsers)
 const userTemplates = computed(() => userConfigStore.userTemplates)
@@ -1337,6 +1415,8 @@ const coverLoading = ref<boolean>(false)
 // 响应式数据
 const selectedUser = ref<any>(null)
 const currentTemplateName = ref<string>('')
+const editSessions = ref<TemplateEditSession[]>([])
+const activeSessionId = ref<string>('')
 const showNewTemplateDialog = ref(false)
 const showLoginDialog = ref(false)
 const showGlobalConfigDialog = ref(false)
@@ -1368,12 +1448,24 @@ watch(highlightAutoSubmitting, newValue => {
     localStorage.setItem('highlightAutoSubmitting', String(newValue))
 })
 
+watch(
+    () => showGlobalConfigDialog.value,
+    newValue => {
+        if (!newValue) {
+            reloadLocalUiSettings()
+        }
+    }
+)
+
 // 生成模板键名
 const getTemplateKey = (uid: number, templateName: string) => `${uid}-${templateName}`
 
 const TEMPLATE_ORGANIZER_KEY = 'template-organizer-v1'
 const TEMPLATE_COVER_DEFAULT_KEY = 'template-cover-default'
 const FOLDER_COVER_DEFAULT_KEY = 'folder-cover-default'
+const TEMPLATE_SESSIONS_KEY = 'template-edit-sessions-v1'
+const TEMPLATE_TAB_MAX_KEY = 'template-tab-max'
+const TEMPLATE_COVER_SIZE_KEY = 'template-cover-size'
 const SIDEBAR_WIDTH_KEY = 'template-sidebar-width'
 const SIDEBAR_MIN_WIDTH = 280
 const DEFAULT_TEMPLATE_COVER = '/noface.jpg'
@@ -1388,6 +1480,69 @@ const moveDialogUserUid = ref<number | null>(null)
 const moveDialogTemplateName = ref<string>('')
 const moveDialogTemplateFolderId = ref<string | null>(null)
 const moveDialogTargetFolderId = ref<string>('')
+
+let sessionPersistTimer: number | null = null
+const templateCoverSizeValue = ref(48)
+const draggingTemplate = ref<{
+    uid: number
+    templateName: string
+    folderId?: string
+} | null>(null)
+
+const getTemplateTabMax = () => {
+    const raw = Number.parseInt(localStorage.getItem(TEMPLATE_TAB_MAX_KEY) || '', 10)
+    if (!Number.isFinite(raw)) return 15
+    return Math.min(30, Math.max(3, raw))
+}
+
+const getTemplateCoverSize = () => {
+    const raw = Number.parseInt(localStorage.getItem(TEMPLATE_COVER_SIZE_KEY) || '', 10)
+    if (!Number.isFinite(raw)) return 48
+    return Math.min(96, Math.max(40, raw))
+}
+
+const reloadLocalUiSettings = () => {
+    templateCoverSizeValue.value = getTemplateCoverSize()
+}
+
+const templateCoverStyle = computed(() => {
+    const size = templateCoverSizeValue.value
+    return {
+        width: `${size}px`,
+        height: `${size}px`
+    }
+})
+
+const cloneTemplateConfig = (template?: TemplateConfig | null): TemplateConfig => {
+    return JSON.parse(JSON.stringify(template || userConfigStore.createDefaultTemplate()))
+}
+
+const touchActiveSession = () => {
+    const session = editSessions.value.find(item => item.id === activeSessionId.value)
+    if (!session) return
+    session.updatedAt = Date.now()
+}
+
+const persistSessionsNow = () => {
+    try {
+        const payload = {
+            activeSessionId: activeSessionId.value,
+            sessions: editSessions.value
+        }
+        localStorage.setItem(TEMPLATE_SESSIONS_KEY, JSON.stringify(payload))
+    } catch (error) {
+        console.error('保存编辑会话失败:', error)
+    }
+}
+
+const schedulePersistSessions = () => {
+    if (sessionPersistTimer) {
+        clearTimeout(sessionPersistTimer)
+    }
+    sessionPersistTimer = window.setTimeout(() => {
+        persistSessionsNow()
+    }, 200)
+}
 
 const getDefaultOrganizer = (): UserTemplateOrganizer => ({
     sortMode: 'manual',
@@ -2003,6 +2158,79 @@ const moveTemplatePosition = (uid: number, templateName: string, direction: 'up'
     saveTemplateOrganizer()
 }
 
+const isTemplateDragEnabled = (uid: number, expired: boolean) => {
+    if (expired || templateLoading.value) return false
+    return getTemplateSortMode(uid) === 'manual'
+}
+
+const getTemplateOrderRef = (organizer: UserTemplateOrganizer, folderId?: string) => {
+    if (!folderId) return organizer.ungroupedOrder
+    const folder = organizer.folders.find(item => item.id === folderId)
+    return folder ? folder.order : organizer.ungroupedOrder
+}
+
+const onTemplateDragStart = (
+    event: DragEvent,
+    uid: number,
+    templateName: string,
+    folderId?: string
+) => {
+    if (!isTemplateDragEnabled(uid, false)) return
+    draggingTemplate.value = { uid, templateName, folderId }
+    event.dataTransfer?.setData('text/plain', templateName)
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move'
+    }
+}
+
+const onTemplateDragOver = (
+    event: DragEvent,
+    uid: number,
+    _templateName: string,
+    _folderId?: string
+) => {
+    if (!draggingTemplate.value) return
+    if (draggingTemplate.value.uid !== uid) return
+    if (!isTemplateDragEnabled(uid, false)) return
+    if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'move'
+    }
+}
+
+const onTemplateDrop = (
+    _event: DragEvent,
+    uid: number,
+    targetTemplateName: string,
+    targetFolderId?: string
+) => {
+    const dragging = draggingTemplate.value
+    draggingTemplate.value = null
+    if (!dragging) return
+    if (dragging.uid !== uid) return
+    if (dragging.templateName === targetTemplateName && dragging.folderId === targetFolderId) return
+    if (!isTemplateDragEnabled(uid, false)) return
+
+    const organizer = getUserOrganizer(uid)
+    const sourceOrder = getTemplateOrderRef(organizer, dragging.folderId)
+    const targetOrder = getTemplateOrderRef(organizer, targetFolderId)
+
+    const sourceIndex = sourceOrder.indexOf(dragging.templateName)
+    if (sourceIndex < 0) return
+    sourceOrder.splice(sourceIndex, 1)
+
+    const targetIndex = targetOrder.indexOf(targetTemplateName)
+    if (targetIndex < 0) {
+        targetOrder.push(dragging.templateName)
+    } else {
+        targetOrder.splice(targetIndex, 0, dragging.templateName)
+    }
+    saveTemplateOrganizer()
+}
+
+const onTemplateDragEnd = () => {
+    draggingTemplate.value = null
+}
+
 // 获取当前模板的自动提交状态
 const getCurrentAutoSubmitting = computed(() => {
     if (!selectedUser.value || !currentTemplateName.value) return false
@@ -2191,35 +2419,22 @@ const selectedSubCategory = ref<any>(null)
 const categoryPopoverVisible = ref(false)
 let generalUpdateTimer: number | null = null
 
-const currentTemplate = computed(() => {
-    if (!selectedUser.value || !currentTemplateName.value || !userConfigStore.configRoot?.config) {
-        return null
-    }
-    const userConfig = userConfigStore.configRoot.config[selectedUser.value.uid]
-    if (!userConfig || !userConfig.templates[currentTemplateName.value]) {
-        return null
-    }
-    return userConfig.templates[currentTemplateName.value]
-})
+const currentSession = computed(
+    () => editSessions.value.find(session => session.id === activeSessionId.value) || null
+)
+
+const currentTemplate = computed(() => currentSession.value?.draft || null)
 
 // 当前表单数据 - 直接操作模板配置
 const currentForm = computed({
     get() {
-        return currentTemplate.value
+        return currentSession.value?.draft || null
     },
     set(value) {
-        if (
-            !selectedUser.value ||
-            !currentTemplateName.value ||
-            !userConfigStore.configRoot?.config ||
-            !value
-        ) {
-            return
-        }
-        const userConfig = userConfigStore.configRoot.config[selectedUser.value.uid]
-        if (userConfig && userConfig.templates[currentTemplateName.value]) {
-            userConfig.templates[currentTemplateName.value] = value
-        }
+        if (!currentSession.value || !value) return
+        currentSession.value.draft = value
+        touchActiveSession()
+        schedulePersistSessions()
     }
 })
 
@@ -2440,6 +2655,7 @@ const forwardConsole = (fnName: keyof Console, logger: (level: string, ...args: 
 
 onMounted(async () => {
     loadTemplateOrganizer()
+    reloadLocalUiSettings()
     loadSidebarWidth()
     await initializeData()
     await setupDragAndDrop()
@@ -2476,6 +2692,11 @@ onUnmounted(() => {
     if (generalUpdateTimer) {
         clearInterval(generalUpdateTimer)
         generalUpdateTimer = null
+    }
+
+    if (sessionPersistTimer) {
+        clearTimeout(sessionPersistTimer)
+        sessionPersistTimer = null
     }
 
     if (sidebarResizeCleanup) {
@@ -2528,7 +2749,10 @@ const initializeData = async () => {
         }
 
         setTimeout(async () => {
-            await restoreTemplateSelection()
+            const restoredSessions = await restoreTemplateSessions()
+            if (!restoredSessions) {
+                await restoreTemplateSelection()
+            }
             restoreCardCollapsedState()
         }, 100)
     } catch (error) {
@@ -2547,6 +2771,21 @@ watch(
         syncTemplateOrganizer()
     },
     { deep: true }
+)
+
+watch(
+    () => editSessions.value,
+    () => {
+        schedulePersistSessions()
+    },
+    { deep: true }
+)
+
+watch(
+    () => activeSessionId.value,
+    () => {
+        schedulePersistSessions()
+    }
 )
 
 const hasUnsavedChanges = (
@@ -2688,6 +2927,15 @@ const setupKeyboardShortcuts = async () => {
             if (selectedUser.value && currentTemplateName.value) {
                 saveTemplate()
             }
+            return
+        }
+
+        // Ctrl+W 关闭当前标签页
+        if (event.ctrlKey && event.key.toLowerCase() === 'w') {
+            event.preventDefault()
+            if (activeSessionId.value) {
+                closeSessionTab(activeSessionId.value)
+            }
         }
     }
 
@@ -2749,6 +2997,44 @@ const restoreCardCollapsedState = () => {
         }
     } catch (error) {
         console.error('恢复卡片折叠状态失败:', error)
+    }
+}
+
+const restoreTemplateSessions = async () => {
+    try {
+        const raw = localStorage.getItem(TEMPLATE_SESSIONS_KEY)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as {
+            activeSessionId?: string
+            sessions?: TemplateEditSession[]
+        }
+        if (!parsed?.sessions?.length) return false
+
+        const restored: TemplateEditSession[] = []
+        for (const session of parsed.sessions) {
+            const user = loginUsers.value.find(item => item.uid === session.uid)
+            if (!user || user.expired) continue
+            const template = userConfigStore.getUserTemplate(session.uid, session.templateName)
+            if (!template) continue
+            restored.push({
+                ...session,
+                username: user.username || session.username,
+                draft: cloneTemplateConfig(session.draft || template),
+                updatedAt: Date.now()
+            })
+        }
+        if (!restored.length) return false
+
+        editSessions.value = restored.slice(0, getTemplateTabMax())
+        const activeId = parsed.activeSessionId || editSessions.value[0].id
+        const existsActive = editSessions.value.some(item => item.id === activeId)
+        await setActiveSession(existsActive ? activeId : editSessions.value[0].id)
+        schedulePersistSessions()
+        utilsStore.showMessage('已恢复上次编辑标签页', 'success')
+        return true
+    } catch (error) {
+        console.error('恢复编辑会话失败:', error)
+        return false
     }
 }
 
@@ -2917,10 +3203,11 @@ const ensureTitleFromFirstVideo = (videoTitle: string) => {
     }
 }
 
-const addVideoToCurrentForm = async (videoPath: string) => {
+const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) => {
     // 从路径中提取文件名
     const videoBaseName = videoPath.split(/[/\\]/).pop() || videoPath
     const videoNameWOExtension = videoBaseName.replace(/\.[^/.]+$/, '').slice(0, 80)
+    const finalTitle = (customTitle || videoNameWOExtension).slice(0, 80)
     const videoExt = videoBaseName.split('.').pop()?.toLowerCase() || ''
 
     const extFilter = [
@@ -2949,7 +3236,7 @@ const addVideoToCurrentForm = async (videoPath: string) => {
     }
 
     const existingFile = currentForm.value.videos.find(
-        f => f.path === videoPath || videoNameWOExtension === f.title
+        f => f.path === videoPath || finalTitle === f.title
     )
     if (existingFile) {
         return 0 // 跳过已存在的文件
@@ -2980,7 +3267,7 @@ const addVideoToCurrentForm = async (videoPath: string) => {
     currentForm.value.videos.push({
         id: videoId,
         filename: videoBaseName, // 使用完整的文件路径
-        title: videoNameWOExtension, // 去除扩展名作为标题
+        title: finalTitle, // 去除扩展名作为标题或使用自定义标题
         desc: '',
         path: videoPath, // 保存完整路径
         complete: false,
@@ -2988,7 +3275,7 @@ const addVideoToCurrentForm = async (videoPath: string) => {
     })
 
     // 标题为空时，自动使用本次导入的第一个视频文件名（去扩展名）作为标题
-    ensureTitleFromFirstVideo(videoNameWOExtension)
+    ensureTitleFromFirstVideo(finalTitle)
 
     // 检查是否启用自动添加到上传队列
     if (userConfigStore.configRoot?.auto_upload && selectedUser.value) {
@@ -3091,7 +3378,18 @@ const handleUserExpansion = (userUid: number) => {
 }
 
 // 处理模板选择点击 - 在模板加载时禁用
-const handleTemplateSelection = (user: any, templateName: string) => {
+const handleTemplateSelection = (user: any, templateName: string, event?: MouseEvent) => {
+    if (event) {
+        const target = event.target as HTMLElement | null
+        if (
+            target?.closest('.template-menu-btn') ||
+            target?.closest('.el-dropdown') ||
+            target?.closest('.el-dropdown-menu')
+        ) {
+            return
+        }
+    }
+
     if (user?.expired) {
         showLoginDialog.value = true
         utilsStore.showMessage('该用户 Cookie 已过期，请重新登录', 'warning')
@@ -3117,75 +3415,150 @@ const handleCoverSelection = () => {
     }
 }
 
-// 选择模板
-const selectTemplate = async (user: any, templateName: string) => {
-    // 如果正在加载模板，禁止切换
-    if (templateLoading.value) {
+const getSessionTitle = (uid: number, templateName: string) => {
+    const count = editSessions.value.filter(
+        session => session.uid === uid && session.templateName === templateName
+    ).length
+    return `${templateName} #${count + 1}`
+}
+
+const setActiveSession = async (sessionId: string) => {
+    const session = editSessions.value.find(item => item.id === sessionId)
+    if (!session) return
+    activeSessionId.value = session.id
+    selectedUser.value =
+        loginUsers.value.find(user => user.uid === session.uid) || {
+            uid: session.uid,
+            username: session.username
+        }
+    currentTemplateName.value = session.templateName
+    touchActiveSession()
+    await loadTemplate()
+    saveTemplateSelection(session.uid, session.templateName)
+    schedulePersistSessions()
+}
+
+const openTemplateSession = async (user: any, templateName: string) => {
+    if (editSessions.value.length >= getTemplateTabMax()) {
+        utilsStore.showMessage(`最多可打开 ${getTemplateTabMax()} 个编辑标签页`, 'warning')
         return
     }
 
-    if (selectedUser.value === user && currentTemplateName.value === templateName) {
-        // 如果已经选择了相同的用户和模板，则不需要切换
-        return
+    const template = userConfigStore.getUserTemplate(user.uid, templateName)
+    const session: TemplateEditSession = {
+        id: uuidv4(),
+        uid: user.uid,
+        username: user.username || '',
+        templateName,
+        tabTitle: getSessionTitle(user.uid, templateName),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        draft: cloneTemplateConfig(template)
     }
+    editSessions.value.push(session)
+    lastSubmit.value = ''
+    await setActiveSession(session.id)
+
+    // 滚动到顶部
+    nextTick(() => {
+        if (contentWrapperRef.value) {
+            contentWrapperRef.value.scrollTop = 0
+        }
+    })
+
+    const aid = session.draft?.aid
+    setTimeout(async () => {
+        if (!aid) return
+        try {
+            const currentSession = editSessions.value.find(item => item.id === session.id)
+            if (!currentSession) return
+            const newTemplate = await getNewTemplateFromAv(user.uid, aid)
+            const savedTemplate = userConfigStore.getUserTemplate(user.uid, templateName)
+            if (savedTemplate && hasUnsavedChanges(savedTemplate, newTemplate)) {
+                await ElMessageBox.confirm(
+                    `检测到本地模板内容与bilibili不一致，是否刷新？（此操作会丢失当前标签页未保存的更改）`,
+                    '',
+                    {
+                        confirmButtonText: '刷新并继续',
+                        cancelButtonText: '不刷新，仅显示当前',
+                        type: 'info'
+                    }
+                )
+                currentSession.draft = cloneTemplateConfig(newTemplate)
+                if (activeSessionId.value === session.id) {
+                    await loadTemplate()
+                }
+                schedulePersistSessions()
+            }
+        } catch (error) {
+            console.error('自动刷新模板数据失败:', error)
+        }
+    }, 666)
+}
+
+const closeSessionTab = async (sessionId: string) => {
+    const index = editSessions.value.findIndex(item => item.id === sessionId)
+    if (index < 0) return
+
+    const closing = editSessions.value[index]
+    const savedTemplate = userConfigStore.getUserTemplate(closing.uid, closing.templateName)
+    if (savedTemplate && hasUnsavedChanges(savedTemplate, closing.draft)) {
+        try {
+            await ElMessageBox.confirm(
+                `标签页 "${closing.tabTitle}" 有未保存修改，确定关闭吗？`,
+                '关闭标签页',
+                {
+                    confirmButtonText: '关闭',
+                    cancelButtonText: '取消',
+                    type: 'warning'
+                }
+            )
+        } catch {
+            return
+        }
+    }
+
+    editSessions.value.splice(index, 1)
+    if (activeSessionId.value === sessionId) {
+        const fallback = editSessions.value[Math.max(0, index - 1)] || editSessions.value[0]
+        if (fallback) {
+            await setActiveSession(fallback.id)
+        } else {
+            activeSessionId.value = ''
+            selectedUser.value = null
+            currentTemplateName.value = ''
+            tags.value = []
+            selectedCategory.value = null
+            selectedSubCategory.value = null
+        }
+    }
+    schedulePersistSessions()
+}
+
+const handleSessionTabClick = async (pane: any) => {
+    if (!pane?.props?.name) return
+    if (pane.props.name === activeSessionId.value) return
+    await setActiveSession(String(pane.props.name))
+}
+
+const handleTabLabelMouseup = async (event: MouseEvent, sessionId: string) => {
+    if (event.button !== 1) return
+    event.preventDefault()
+    event.stopPropagation()
+    await closeSessionTab(sessionId)
+}
+
+// 选择模板（打开新标签页）
+const selectTemplate = async (user: any, templateName: string) => {
+    if (templateLoading.value) return
 
     templateLoading.value = true
     try {
-        lastSubmit.value = ''
-
-        selectedUser.value = user
-        currentTemplateName.value = templateName
-
-        // 滚动到顶部
-        nextTick(() => {
-            if (contentWrapperRef.value) {
-                contentWrapperRef.value.scrollTop = 0
-            }
-        })
-
-        // 加载模板数据到表单
-        await loadTemplate()
-
-        // 保存模板选择到localStorage
-        saveTemplateSelection(user.uid, templateName)
-
-        // 如果模板有 aid，主动刷新模板数据
-        const aid = currentTemplate.value?.aid
-        setTimeout(async () => {
-            if (aid) {
-                try {
-                    if (
-                        selectedUser.value?.uid === user.uid &&
-                        currentTemplateName.value === templateName
-                    ) {
-                        const newTemplate = await getNewTemplateFromAv(user.uid, aid)
-                        const currentTemplateData =
-                            userConfigStore.configRoot?.config[user.uid].templates[templateName]
-                        if (
-                            currentTemplateData &&
-                            hasUnsavedChanges(currentTemplateData, newTemplate)
-                        ) {
-                            await ElMessageBox.confirm(
-                                `检测到本地模板内容与bilibili不一致，是否刷新？（此操作会丢失所有未保存的更改）`,
-                                '',
-                                {
-                                    confirmButtonText: '刷新并继续',
-                                    cancelButtonText: '不刷新，仅显示当前',
-                                    type: 'info'
-                                }
-                            )
-                            await reloadTemplateFromAV(user.uid, aid)
-                        }
-                    }
-                } catch (error) {
-                    console.error('自动刷新模板数据失败:', error)
-                }
-            }
-        }, 666)
-        console.log(`已切换到模板: ${user.username} - ${templateName}`)
+        await openTemplateSession(user, templateName)
+        console.log(`已打开模板标签页: ${user.username} - ${templateName}`)
     } catch (error) {
-        console.error('切换模板失败:', error)
-        utilsStore.showMessage(`切换模板失败: ${error}`, 'error')
+        console.error('打开模板标签页失败:', error)
+        utilsStore.showMessage(`打开模板标签页失败: ${error}`, 'error')
     } finally {
         templateLoading.value = false
     }
@@ -3294,19 +3667,12 @@ const reloadTemplateFromAV = async (userUid: number, aid: number) => {
 // 加载模板数据到表单
 const loadTemplate = async () => {
     try {
-        // 如果没有模板，则使用默认模板配置
+        // 如果当前标签页草稿为空，则填充默认模板配置
         if (!currentTemplate.value) {
-            const defaultTemplate = userConfigStore.createDefaultTemplate()
-            // 直接设置到配置中
-            if (
-                selectedUser.value &&
-                currentTemplateName.value &&
-                userConfigStore.configRoot?.config
-            ) {
-                const userConfig = userConfigStore.configRoot.config[selectedUser.value.uid]
-                if (userConfig) {
-                    userConfig.templates[currentTemplateName.value] = defaultTemplate
-                }
+            if (currentSession.value) {
+                currentSession.value.draft = cloneTemplateConfig()
+                touchActiveSession()
+                schedulePersistSessions()
             }
 
             // 清空标签
@@ -3433,7 +3799,17 @@ const handleTemplateCommand = async (
                 } else {
                     organizer.ungroupedOrder.push(trimmedName)
                 }
+                editSessions.value.forEach(session => {
+                    if (session.uid === user.uid && session.templateName === template.name) {
+                        session.templateName = trimmedName
+                        session.tabTitle = session.tabTitle.replace(template.name, trimmedName)
+                        if (session.id === activeSessionId.value) {
+                            currentTemplateName.value = trimmedName
+                        }
+                    }
+                })
                 saveTemplateOrganizer()
+                schedulePersistSessions()
 
                 // 更新当前选择
                 if (
@@ -3466,6 +3842,12 @@ const handleTemplateCommand = async (
                 await userConfigStore.removeUserTemplate(user.uid, template_name)
                 removeTemplateFromOrganizer(user.uid, template_name)
                 saveTemplateOrganizer()
+                const deleteSessionIds = editSessions.value
+                    .filter(item => item.uid === user.uid && item.templateName === template_name)
+                    .map(item => item.id)
+                for (const sessionId of deleteSessionIds) {
+                    await closeSessionTab(sessionId)
+                }
 
                 // 如果删除的是当前选中的模板，清空选择
                 if (
@@ -3530,22 +3912,9 @@ const handleTemplateCreated = async (userUid: number, templateName: string) => {
                 getUserOrganizer(userUid)
             )}`
         )
-        selectedUser.value = targetUser
-        currentTemplateName.value = templateName
-
-        // 滚动到顶部
-        nextTick(() => {
-            if (contentWrapperRef.value) {
-                contentWrapperRef.value.scrollTop = 0
-            }
-        })
-
         templateLoading.value = true
-        await loadTemplate()
+        await openTemplateSession(targetUser, templateName)
         templateLoading.value = false
-
-        // 保存新创建的模板选择
-        saveTemplateSelection(userUid, templateName)
     }
 }
 
@@ -3884,11 +4253,15 @@ const createUpload = async () => {
 // 处理文件夹监控添加视频事件
 const handleAddVideosToForm = async (newVideos: any[]) => {
     templateLoading.value = true
-    for (const videoPath of newVideos) {
+    for (const item of newVideos) {
         try {
-            await addVideoToCurrentForm(videoPath)
+            if (typeof item === 'string') {
+                await addVideoToCurrentForm(item)
+            } else if (item?.path) {
+                await addVideoToCurrentForm(item.path, item.title)
+            }
         } catch (error) {
-            console.error(`添加视频失败: ${videoPath}`, error)
+            console.error('添加视频失败:', item, error)
         }
     }
     templateLoading.value = false
@@ -4030,6 +4403,14 @@ const saveTemplateName = async () => {
         // 再删除原模板
         await userConfigStore.removeUserTemplate(selectedUser.value.uid, currentTemplateName.value)
 
+        editSessions.value.forEach(session => {
+            if (session.uid === selectedUser.value.uid && session.templateName === currentTemplateName.value) {
+                session.templateName = newName
+                session.tabTitle = session.tabTitle.replace(currentTemplateName.value, newName)
+            }
+        })
+        schedulePersistSessions()
+
         // 更新当前选择
         currentTemplateName.value = newName
 
@@ -4075,6 +4456,13 @@ const handleLogoutUser = async (uid: number) => {
     try {
         const success = await authStore.logoutUser(uid)
         if (success) {
+            const targetSessionIds = editSessions.value
+                .filter(session => session.uid === uid)
+                .map(session => session.id)
+            for (const sessionId of targetSessionIds) {
+                await closeSessionTab(sessionId)
+            }
+
             // 如果登出的用户正是当前选择的用户，清除相关记录
             if (selectedUser.value?.uid === uid) {
                 selectedUser.value = null
@@ -4548,6 +4936,10 @@ body.sidebar-resizing {
     min-width: 0;
 }
 
+.template-item[draggable='true'] {
+    cursor: grab;
+}
+
 .template-item-in-folder {
     margin-left: 10px;
 }
@@ -4874,6 +5266,18 @@ body.sidebar-resizing {
 .form-header h3 {
     margin: 0;
     color: #303133;
+}
+
+.editor-tabs {
+    margin-bottom: 10px;
+}
+
+.editor-tab-label {
+    display: inline-block;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .template-name-container {

@@ -194,6 +194,20 @@
                         </span>
                     </el-form-item>
 
+                    <el-form-item label="监控后批量命名">
+                        <el-checkbox v-model="settings.enableBatchRename">
+                            启用（按检测到的新增文件顺序）
+                        </el-checkbox>
+                    </el-form-item>
+                    <el-form-item v-if="settings.enableBatchRename" label="命名列表">
+                        <el-input
+                            v-model="settings.batchRenameText"
+                            type="textarea"
+                            :rows="5"
+                            placeholder="每行一个分P名，按检测到的顺序依次使用；用完后不再改名"
+                        />
+                    </el-form-item>
+
                     <el-form-item label="定时开始">
                         <el-checkbox v-model="settings.delayedStart"> 启用定时开始 </el-checkbox>
                         <span class="setting-description"> 启用后，将在指定时间开始监控 </span>
@@ -374,7 +388,9 @@ const settings = ref({
     startTime: null as string | null, // 开始时间
     stableCheckCount: 3, // 文件大小稳定检测次数，默认3次
     enableFilenameFilter: false, // 是否启用文件名正则过滤
-    filenameRegex: '' // 文件名过滤正则表达式
+    filenameRegex: '', // 文件名过滤正则表达式
+    enableBatchRename: false,
+    batchRenameText: ''
 })
 
 // 监控状态
@@ -403,6 +419,13 @@ const testFilename = ref('')
 
 // 定时器
 let monitorTimer: number | null = null
+const batchRenameCursor = ref(0)
+
+const getBatchRenameLines = () =>
+    settings.value.batchRenameText
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
 
 // 监听窗口打开状态，每次打开时清空文件夹路径
 watch(visible, (newValue, oldValue) => {
@@ -700,7 +723,17 @@ const performCheck = async (): Promise<{
 // 添加新文件到视频列表
 const addNewFiles = async (filenames: string[]) => {
     if (filenames.length > 0) {
-        emit('add-videos', filenames)
+        const renameLines = settings.value.enableBatchRename ? getBatchRenameLines() : []
+        const payload = filenames.map(path => {
+            let title: string | undefined
+            if (renameLines.length > 0 && batchRenameCursor.value < renameLines.length) {
+                title = renameLines[batchRenameCursor.value].slice(0, 80)
+                batchRenameCursor.value++
+            }
+            return { path, title }
+        })
+
+        emit('add-videos', payload)
         addedFilesCount.value += filenames.length
         utilsStore.showMessage(`已添加 ${filenames.length} 个视频文件`, 'success')
     }
@@ -803,6 +836,7 @@ const startMonitoringNow = async () => {
     waitingForStart.value = false
     currentCheckRound.value = 0
     addedFilesCount.value = 0
+    batchRenameCursor.value = 0
 
     // 清除倒计时定时器
     if (startCountdownTimer.value) {
