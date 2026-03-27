@@ -577,6 +577,12 @@
                                 />
                             </div>
                             <div class="header-actions">
+                                <el-button
+                                    @click="openFolderApplyDialogForCurrent"
+                                    :disabled="templateLoading"
+                                >
+                                    选择模板文件夹
+                                </el-button>
                                 <el-button @click="resetTemplate" :disabled="templateLoading"
                                     >放弃更改</el-button
                                 >
@@ -612,6 +618,16 @@
                                     <div class="card-header" @click="toggleCardCollapsed('basic')">
                                         <span>基本信息</span>
                                         <div class="header-actions">
+                                            <el-button
+                                                type="primary"
+                                                text
+                                                size="small"
+                                                @click.stop="openFolderApplyDialogForCurrent"
+                                                title="选择模板文件夹并应用到当前标签页"
+                                                :disabled="templateLoading"
+                                            >
+                                                选择模板文件夹
+                                            </el-button>
                                             <el-button
                                                 type="danger"
                                                 text
@@ -1045,20 +1061,13 @@
                                                 type="datetime"
                                                 placeholder="选择发布时间"
                                                 format="YYYY-MM-DD HH:mm:ss"
+                                                :default-value="scheduleDefaultDate"
                                                 :disabled="templateLoading"
                                                 :disabled-date="
                                                     (date: Date) => {
-                                                        const now = new Date()
-                                                        const twoHoursLater = new Date(
-                                                            now.getTime() + 2 * 60 * 60 * 1000
-                                                        )
-                                                        const fifteenDaysLater = new Date(
-                                                            now.getTime() + 15 * 24 * 60 * 60 * 1000
-                                                        )
-
                                                         return (
-                                                            date < twoHoursLater ||
-                                                            date > fifteenDaysLater
+                                                            date < schedulePickerMinDay ||
+                                                            date > schedulePickerMaxDay
                                                         )
                                                     }
                                                 "
@@ -1238,7 +1247,39 @@
             ref="newTemplateRef"
             v-model="showNewTemplateDialog"
             @template-created="handleTemplateCreated"
+            @apply-folder-to-template="handleApplyFolderToTemplateFromDialog"
         />
+
+        <el-dialog v-model="showFolderApplyDialog" title="选择模板文件夹" width="560px">
+            <el-form label-width="90px">
+                <el-form-item label="目标模板">
+                    <el-input :model-value="folderApplyTemplateLabel" readonly />
+                </el-form-item>
+                <el-form-item label="文件夹">
+                    <div class="folder-apply-row">
+                        <el-input
+                            v-model="folderApplyPath"
+                            readonly
+                            placeholder="请选择模板文件夹（仅应用到当前标签页草稿）"
+                        />
+                        <el-button @click="selectFolderApplyPath">选择模板文件夹</el-button>
+                    </div>
+                </el-form-item>
+                <el-form-item label="应用字段">
+                    <el-checkbox-group v-model="folderApplyFields">
+                        <el-checkbox value="cover">封面</el-checkbox>
+                        <el-checkbox value="desc">简介</el-checkbox>
+                        <el-checkbox value="tag">标签</el-checkbox>
+                        <el-checkbox value="source">来源</el-checkbox>
+                        <el-checkbox value="title">标题</el-checkbox>
+                    </el-checkbox-group>
+                </el-form-item>
+            </el-form>
+            <template #footer>
+                <el-button @click="showFolderApplyDialog = false">取消</el-button>
+                <el-button type="primary" @click="confirmFolderApplyDialog">应用</el-button>
+            </template>
+        </el-dialog>
 
         <!-- 移动模板到模板夹 -->
         <el-dialog v-model="moveDialogVisible" title="移动到模板夹" width="420px">
@@ -1396,6 +1437,15 @@ interface TemplateEditSession {
     createdAt: number
     updatedAt: number
     draft: TemplateConfig
+    submittedOnce?: boolean
+}
+
+interface FolderApplyOptions {
+    title: boolean
+    cover: boolean
+    desc: boolean
+    tag: boolean
+    source: boolean
 }
 
 // 计算属性
@@ -1417,10 +1467,15 @@ const activeSessionId = ref<string>('')
 const showNewTemplateDialog = ref(false)
 const showLoginDialog = ref(false)
 const showGlobalConfigDialog = ref(false)
+const showFolderApplyDialog = ref(false)
 const loginLoading = ref(false)
 const uploading = ref(false)
 const submitting = ref(false)
 const templateLoading = ref(false) // 模板加载状态锁
+const folderApplyUid = ref<number | null>(null)
+const folderApplyTemplateName = ref('')
+const folderApplyPath = ref('')
+const folderApplyFields = ref<string[]>(['cover', 'desc', 'tag', 'source'])
 
 // 视频状态对话框
 const showVideoStatusDialog = ref(false)
@@ -1432,8 +1487,17 @@ const newTemplateRef = ref<InstanceType<typeof NewTemplete> | null>(null)
 const tagViewRef = ref<InstanceType<typeof TagView> | null>(null)
 // 自动提交状态记录 - 记录每个模板的自动提交状态
 const autoSubmittingRecord = ref<Record<string, boolean>>({})
+const autoSubmitReadySince = ref<Record<string, number>>({})
+const autoSubmitInProgress = ref<Record<string, boolean>>({})
+const autoSubmitRetryCount = ref<Record<string, number>>({})
 // 全局自动提交检查间隔
 let autoSubmitInterval: number | null = null
+
+const folderApplyTemplateLabel = computed(() => {
+    if (!folderApplyTemplateName.value) return ''
+    const user = loginUsers.value.find(u => u.uid === folderApplyUid.value)
+    return user ? `${user.username} / ${folderApplyTemplateName.value}` : folderApplyTemplateName.value
+})
 
 // 高亮显示自动提交状态的开关
 const highlightAutoSubmitting = ref<boolean>(
@@ -1772,13 +1836,28 @@ const selectFolderCover = async (uid: number, folderId: string) => {
 
 const DEFAULT_COVER_DIR_KEY = 'default-cover-dir'
 const DEFAULT_VIDEO_DIR_KEY = 'default-video-dir'
+const DEFAULT_VIDEO_PICKER_DIR_KEY = 'default-video-picker-dir'
+const DEFAULT_FOLDER_APPLY_DIR_KEY = 'default-template-content-dir'
+const DEFAULT_LOG_EXPORT_DIR_KEY = 'default-log-export-dir'
 
 const getDefaultCoverDir = () => localStorage.getItem(DEFAULT_COVER_DIR_KEY) || ''
 const setDefaultCoverDir = (path: string) =>
     localStorage.setItem(DEFAULT_COVER_DIR_KEY, path)
 const getDefaultVideoDir = () => localStorage.getItem(DEFAULT_VIDEO_DIR_KEY) || ''
-const setDefaultVideoDir = (path: string) =>
-    localStorage.setItem(DEFAULT_VIDEO_DIR_KEY, path)
+const getDefaultVideoPickerDir = () =>
+    localStorage.getItem(DEFAULT_VIDEO_PICKER_DIR_KEY) || getDefaultVideoDir()
+const setDefaultVideoPickerDir = (path: string) =>
+    localStorage.setItem(DEFAULT_VIDEO_PICKER_DIR_KEY, path)
+const getDefaultFolderApplyDir = () =>
+    localStorage.getItem(DEFAULT_FOLDER_APPLY_DIR_KEY) || ''
+const setDefaultFolderApplyDir = (path: string) =>
+    localStorage.setItem(DEFAULT_FOLDER_APPLY_DIR_KEY, path)
+const getDefaultLogExportDir = () => localStorage.getItem(DEFAULT_LOG_EXPORT_DIR_KEY) || ''
+const setDefaultLogExportDir = (path: string) =>
+    localStorage.setItem(DEFAULT_LOG_EXPORT_DIR_KEY, path)
+
+const getParentDir = (filePath: string) => filePath.split(/[/\\]/).slice(0, -1).join('\\')
+const joinWinPath = (dir: string, fileName: string) => (dir ? `${dir}\\${fileName}` : fileName)
 
 const sortTemplates = (
     templates: Array<{ name: string; config: TemplateConfig }>,
@@ -1825,6 +1904,180 @@ const toDataUrlFromPath = async (filePath: string) => {
     }
     const base64 = btoa(binary)
     return `data:${guessMimeType(filePath)};base64,${base64}`
+}
+
+const decodeTextFile = async (filePath: string) => {
+    const bytes = await readFile(filePath)
+    try {
+        return new TextDecoder('utf-8').decode(bytes)
+    } catch {
+        let binary = ''
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+        return decodeURIComponent(escape(binary))
+    }
+}
+
+const normalizeTagText = (text: string) => {
+    return text
+        .split(/[\r\n,，;；]+/)
+        .map(v => v.trim())
+        .filter(Boolean)
+        .join(',')
+}
+
+const withHomepageSourceLine = (desc: string | undefined, source: string | undefined) => {
+    const cleanSource = (source || '').trim()
+    if (!cleanSource) return (desc || '').trim()
+    const line = `主页链接：${cleanSource}`
+    const body = (desc || '').trim()
+    if (!body) return line
+    if (body.includes(line)) return body
+    return `${line}\n\n${body}`
+}
+
+const inferTitleFromFileName = (name: string) => {
+    const pure = name.replace(/\.[^.]+$/, '')
+    const m = pure.match(/^\[[0-9\-]+\]\[[^\]]+\](.+)$/)
+    return (m?.[1] || pure || '').trim()
+}
+
+const extractFolderTemplateData = async (folderPath: string) => {
+    const entries = await utilsStore.readDirRecursive(folderPath, false, 2)
+    const files = entries.filter(item => !item.is_directory)
+    const byName = new Map<string, string>()
+    files.forEach(item => byName.set(item.name.toLowerCase(), item.path))
+
+    const findFirst = (candidates: string[]) => {
+        for (const c of candidates) {
+            const hit = byName.get(c.toLowerCase())
+            if (hit) return hit
+        }
+        return ''
+    }
+
+    const textPathTitle = findFirst(['title.txt', '标题.txt'])
+    const textPathDesc = findFirst([
+        'description.txt',
+        'desc.txt',
+        '简介.txt',
+        '简介.description',
+        '.description'
+    ]) || files.find(f => /\.description$/i.test(f.name))?.path || ''
+    const textPathTag = findFirst(['tags.txt', 'tag.txt', '标签.txt'])
+    const looseTagPath =
+        files.find(f => /(?:^|[_\-\s])(tags?|标签)(?:[_\-\s]|\.)/i.test(f.name) && /\.(txt|csv)$/i.test(f.name))
+            ?.path || ''
+    const tagPath = textPathTag || looseTagPath
+    const textPathUrl =
+        files.find(f => /\.url$/i.test(f.name))?.path || findFirst(['source.txt', '来源.txt'])
+    const coverPath =
+        findFirst(['cover.png', 'cover.jpg', 'cover.jpeg', 'thumbnail.png', 'thumbnail.jpg']) ||
+        files.find(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name))?.path ||
+        ''
+
+    const mp4Path = files.find(f => /\.(mp4|mkv|mov|flv|webm)$/i.test(f.name))?.path || ''
+    const mp4Name = files.find(f => f.path === mp4Path)?.name || ''
+
+    const out: {
+        title?: string
+        desc?: string
+        tag?: string
+        source?: string
+        coverPath?: string
+    } = {}
+
+    if (textPathTitle) {
+        out.title = (await decodeTextFile(textPathTitle)).trim()
+    } else if (mp4Name) {
+        out.title = inferTitleFromFileName(mp4Name)
+    }
+
+    if (textPathDesc) {
+        out.desc = (await decodeTextFile(textPathDesc)).trim()
+    }
+    if (tagPath) {
+        out.tag = normalizeTagText(await decodeTextFile(tagPath))
+    } else {
+        const uploaderName = folderPath.split(/[/\\]/).filter(Boolean).pop() || ''
+        if (uploaderName) {
+            out.tag = Array.from(
+                new Set([uploaderName, '虚拟主播', 'vsinger', 'vtuber', '直播', '翻唱'])
+            ).join(',')
+        }
+    }
+    if (textPathUrl) {
+        const raw = (await decodeTextFile(textPathUrl)).trim()
+        const m = raw.match(/URL\s*=\s*(https?:\/\/\S+)/i)
+        out.source = (m?.[1] || raw).trim()
+    }
+    if (coverPath) {
+        out.coverPath = coverPath
+    }
+
+    return out
+}
+
+const applyFolderDataToTemplate = async (
+    uid: number,
+    templateName: string,
+    folderPath: string,
+    options: FolderApplyOptions
+) => {
+    const template = userConfigStore.getUserTemplate(uid, templateName)
+    if (!template) throw new Error('模板不存在')
+
+    let targetSession = editSessions.value.find(
+        session => session.uid === uid && session.templateName === templateName
+    )
+    if (!targetSession) {
+        const targetUser = loginUsers.value.find(user => user.uid === uid)
+        if (!targetUser) throw new Error('目标用户不存在')
+        await openTemplateSession(targetUser, templateName)
+        targetSession = editSessions.value.find(
+            session => session.uid === uid && session.templateName === templateName
+        )
+    }
+    if (!targetSession) throw new Error('未找到可应用的模板标签页')
+
+    const extracted = await extractFolderTemplateData(folderPath)
+    const patch: Partial<TemplateConfig> = {}
+
+    if (options.title && extracted.title) patch.title = extracted.title
+    patch.copyright = 2
+    if (options.tag && extracted.tag) patch.tag = extracted.tag
+    if (options.source && extracted.source) patch.source = extracted.source
+    if (options.desc) {
+        patch.desc = withHomepageSourceLine(extracted.desc, extracted.source)
+    }
+    // 应用模板文件夹时默认切到 音乐-翻唱 分区
+    patch.tid = 31
+    if (options.cover && extracted.coverPath) {
+        try {
+            const coverUrl = await utilsStore.uploadCover(uid, extracted.coverPath)
+            if (coverUrl) patch.cover = coverUrl
+        } catch (e) {
+            utilsStore.showMessage(`封面应用失败: ${e}`, 'warning')
+        }
+    }
+
+    if (Object.keys(patch).length === 0) {
+        utilsStore.showMessage('文件夹中未解析到可应用内容', 'warning')
+        return
+    }
+
+    targetSession.draft = { ...cloneTemplateConfig(targetSession.draft), ...patch }
+    targetSession.updatedAt = Date.now()
+    activeSessionId.value = targetSession.id
+
+    if (selectedUser.value?.uid === uid && currentTemplateName.value === templateName && currentForm.value) {
+        Object.assign(currentForm.value, patch)
+        if (patch.tag !== undefined) {
+            tags.value = (patch.tag || '').split(',').map(v => v.trim()).filter(Boolean)
+        }
+    }
+
+    schedulePersistSessions()
+    utilsStore.showMessage('模板文件夹内容已应用到当前标签页草稿（请手动保存）', 'success')
 }
 
 const bumpCoverVersion = (coverPath?: string) => {
@@ -2152,6 +2405,73 @@ const moveTemplatePosition = (uid: number, templateName: string, direction: 'up'
     saveTemplateOrganizer()
 }
 
+const openFolderApplyDialogForCurrent = () => {
+    if (!selectedUser.value?.uid || !currentTemplateName.value) {
+        utilsStore.showMessage('请先选择模板', 'warning')
+        return
+    }
+    folderApplyUid.value = selectedUser.value.uid
+    folderApplyTemplateName.value = currentTemplateName.value
+    folderApplyPath.value = getDefaultFolderApplyDir()
+    folderApplyFields.value = ['cover', 'desc', 'tag', 'source']
+    showFolderApplyDialog.value = true
+}
+
+const selectFolderApplyPath = async () => {
+    try {
+        const selected = await open({
+            directory: true,
+            multiple: false,
+            defaultPath: getDefaultFolderApplyDir() || undefined
+        })
+        if (!selected) return
+        const picked = String(selected)
+        folderApplyPath.value = picked
+        setDefaultFolderApplyDir(picked)
+    } catch (error) {
+        utilsStore.showMessage(`选择文件夹失败: ${error}`, 'error')
+    }
+}
+
+const confirmFolderApplyDialog = async () => {
+    if (!folderApplyUid.value || !folderApplyTemplateName.value) {
+        utilsStore.showMessage('目标模板无效', 'error')
+        return
+    }
+    if (!folderApplyPath.value) {
+        utilsStore.showMessage('请先选择文件夹', 'warning')
+        return
+    }
+    const picked = new Set(folderApplyFields.value || [])
+    const options: FolderApplyOptions = {
+        title: picked.has('title'),
+        cover: picked.has('cover'),
+        desc: picked.has('desc'),
+        tag: picked.has('tag'),
+        source: picked.has('source')
+    }
+    await applyFolderDataToTemplate(
+        folderApplyUid.value,
+        folderApplyTemplateName.value,
+        folderApplyPath.value,
+        options
+    )
+    showFolderApplyDialog.value = false
+}
+
+const handleApplyFolderToTemplateFromDialog = async (
+    userUid: number,
+    templateName: string,
+    folderPath: string,
+    options: FolderApplyOptions
+) => {
+    try {
+        await applyFolderDataToTemplate(userUid, templateName, folderPath, options)
+    } catch (error) {
+        utilsStore.showMessage(`应用文件夹内容失败: ${error}`, 'error')
+    }
+}
+
 const isTemplateDragEnabled = (uid: number, expired: boolean) => {
     if (expired || templateLoading.value) return false
     return getTemplateSortMode(uid) === 'manual'
@@ -2251,6 +2571,9 @@ const setAutoSubmitting = (sessionId: string, status: boolean) => {
         autoSubmittingRecord.value[key] = true
     } else {
         delete autoSubmittingRecord.value[key]
+        delete autoSubmitReadySince.value[key]
+        delete autoSubmitInProgress.value[key]
+        delete autoSubmitRetryCount.value[key]
     }
 }
 
@@ -2258,6 +2581,18 @@ const setAutoSubmitting = (sessionId: string, status: boolean) => {
 const hasAnyAutoSubmitting = computed(() => {
     return Object.keys(autoSubmittingRecord.value).length > 0
 })
+
+const AUTO_SUBMIT_STABLE_MS = 8000
+const AUTO_SUBMIT_MAX_RETRY = 6
+
+const hasSessionInFlightUploads = (session: any) => {
+    const videoIds = new Set((session?.draft?.videos || []).map((video: any) => video.id))
+    return uploadStore.uploadQueue.some((task: any) => {
+        if (task?.user?.uid !== session?.uid) return false
+        if (!videoIds.has(task?.video?.id)) return false
+        return ['Waiting', 'Pending', 'Running'].includes(task.status)
+    })
+}
 
 const isVideoUploadCompleted = (video: any) => {
     if (!video) return false
@@ -2291,18 +2626,67 @@ const checkAutoSubmitAll = async () => {
             const allUploaded = template.videos.every(video => isVideoUploadCompleted(video))
 
             if (allUploaded && autoSubmittingRecord.value[sessionId]) {
-                // 文件已全部上传完成，执行提交
-                setAutoSubmitting(sessionId, false)
+                if (autoSubmitInProgress.value[sessionId]) {
+                    continue
+                }
+
+                if (hasSessionInFlightUploads(session)) {
+                    delete autoSubmitReadySince.value[sessionId]
+                    continue
+                }
+
+                const readySince = autoSubmitReadySince.value[sessionId] || 0
+                const now = Date.now()
+                if (!readySince) {
+                    autoSubmitReadySince.value[sessionId] = now
+                    continue
+                }
+                if (now - readySince < AUTO_SUBMIT_STABLE_MS) {
+                    continue
+                }
+
+                autoSubmitInProgress.value[sessionId] = true
                 try {
                     console.log(`自动提交触发: ${session.tabTitle}`)
-                    await performTemplateSubmit(session.uid, session.templateName, template)
+                    await performTemplateSubmit(session.uid, session.templateName, template, session.id)
+                    setAutoSubmitting(sessionId, false)
+                    delete autoSubmitReadySince.value[sessionId]
+                    autoSubmitRetryCount.value[sessionId] = 0
                 } catch (error) {
                     console.error(`标签页 ${session.tabTitle} 自动提交失败:`, error)
+                    const message = String(error || '')
+                    if (message.includes('code: 21015') || message.includes('code\":21015')) {
+                        const retry = (autoSubmitRetryCount.value[sessionId] || 0) + 1
+                        autoSubmitRetryCount.value[sessionId] = retry
+                        if (retry <= AUTO_SUBMIT_MAX_RETRY) {
+                            autoSubmitReadySince.value[sessionId] = Date.now()
+                            utilsStore.showMessage(
+                                `自动提交等待重试(${retry}/${AUTO_SUBMIT_MAX_RETRY}): ${session.tabTitle}`,
+                                'warning'
+                            )
+                        } else {
+                            setAutoSubmitting(sessionId, false)
+                            delete autoSubmitReadySince.value[sessionId]
+                            utilsStore.showMessage(
+                                `自动提交重试已达上限，请手动提交: ${session.tabTitle}`,
+                                'error'
+                            )
+                        }
+                    } else {
+                        autoSubmitReadySince.value[sessionId] = Date.now()
+                    }
+                } finally {
+                    delete autoSubmitInProgress.value[sessionId]
                 }
+            } else {
+                delete autoSubmitReadySince.value[sessionId]
             }
         } else {
             // 没有视频文件，清除自动提交状态
             setAutoSubmitting(sessionId, false)
+            delete autoSubmitReadySince.value[sessionId]
+            delete autoSubmitInProgress.value[sessionId]
+            delete autoSubmitRetryCount.value[sessionId]
         }
     }
 
@@ -2321,7 +2705,12 @@ const startAutoSubmitCheck = () => {
 }
 
 // 执行模板提交
-const performTemplateSubmit = async (uid: number, templateName: string, template: any) => {
+const performTemplateSubmit = async (
+    uid: number,
+    templateName: string,
+    template: any,
+    sessionId?: string
+) => {
     const user = loginUsers.value.find(u => u.uid === uid)
     if (!user) throw new Error('用户不存在')
 
@@ -2336,6 +2725,21 @@ const performTemplateSubmit = async (uid: number, templateName: string, template
 
         utilsStore.showMessage(`视频${resp.bvid}提交成功 (模板: ${templateName})`, 'success')
         console.log(`视频${resp.bvid}提交成功 (模板: ${templateName})`, 'success')
+
+        const targetSession =
+            (sessionId && editSessions.value.find(s => s.id === sessionId)) ||
+            editSessions.value.find(
+                s =>
+                    s.id === activeSessionId.value &&
+                    s.uid === uid &&
+                    s.templateName === templateName
+            ) ||
+            editSessions.value.find(s => s.uid === uid && s.templateName === templateName)
+        if (targetSession) {
+            targetSession.submittedOnce = true
+            targetSession.updatedAt = Date.now()
+            schedulePersistSessions()
+        }
 
         if (resp && resp.aid && utilsStore.hasSeason) {
             try {
@@ -2454,6 +2858,34 @@ const currentForm = computed({
 
 const tags = ref<string[]>([])
 
+const SCHEDULE_MIN_LEAD_MS = (2 * 60 + 10) * 60 * 1000
+const SCHEDULE_DEFAULT_LEAD_MS = 3 * 60 * 60 * 1000
+const SCHEDULE_MAX_DAYS = 15
+
+const getScheduleMinDate = () => new Date(Date.now() + SCHEDULE_MIN_LEAD_MS)
+const getScheduleMaxDate = () => new Date(Date.now() + SCHEDULE_MAX_DAYS * 24 * 60 * 60 * 1000)
+const getScheduleDefaultDate = () => new Date(Date.now() + SCHEDULE_DEFAULT_LEAD_MS)
+const scheduleDefaultDate = computed(() => getScheduleDefaultDate())
+const schedulePickerMinDay = computed(() => {
+    const d = getScheduleMinDate()
+    d.setHours(0, 0, 0, 0)
+    return d
+})
+const schedulePickerMaxDay = computed(() => {
+    const d = getScheduleMaxDate()
+    d.setHours(23, 59, 59, 999)
+    return d
+})
+
+const clampScheduleDate = (raw: Date | null) => {
+    if (!raw) return null
+    const min = getScheduleMinDate()
+    const max = getScheduleMaxDate()
+    if (raw < min) return min
+    if (raw > max) return max
+    return raw
+}
+
 // 日期选择器的计算属性 - 处理时间戳转换
 const dtimeDate = computed({
     get() {
@@ -2461,7 +2893,23 @@ const dtimeDate = computed({
     },
     set(value: Date | null) {
         if (currentForm.value) {
-            currentForm.value.dtime = value ? Math.floor(value.getTime() / 1000) : undefined
+            const min = getScheduleMinDate()
+            const max = getScheduleMaxDate()
+            const clamped = clampScheduleDate(value)
+            currentForm.value.dtime = clamped ? Math.floor(clamped.getTime() / 1000) : undefined
+            if (value && clamped && Math.abs(clamped.getTime() - value.getTime()) > 1000) {
+                if (value < min) {
+                    utilsStore.showMessage(
+                        `定时发布需在当前时间至少2小时10分钟后，已自动调整到 ${min.toLocaleString()}`,
+                        'warning'
+                    )
+                } else if (value > max) {
+                    utilsStore.showMessage(
+                        `定时发布时间不能超过15天，已自动调整到 ${max.toLocaleString()}`,
+                        'warning'
+                    )
+                }
+            }
         }
     }
 })
@@ -2480,6 +2928,16 @@ const videos = computed({
 
 // 检查指定模板是否有未保存的改动
 const checkTemplateHasUnsavedChanges = (uid: number, templateName: string): boolean => {
+    const openedSession = editSessions.value.find(
+        session => session.uid === uid && session.templateName === templateName
+    )
+    if (openedSession) {
+        const savedTemplate = userConfigStore.getUserTemplate(uid, templateName)
+        if (savedTemplate) {
+            return hasUnsavedChanges(savedTemplate, openedSession.draft)
+        }
+    }
+
     if (!userConfigStore.configRoot?.config || !userConfigStore.configBase?.config) {
         return false
     }
@@ -3052,7 +3510,8 @@ const restoreTemplateSessions = async () => {
                 ...session,
                 username: user.username || session.username,
                 draft: cloneTemplateConfig(session.draft || template),
-                updatedAt: Date.now()
+                updatedAt: Date.now(),
+                submittedOnce: !!session.submittedOnce
             })
         }
         if (!restored.length) return false
@@ -3485,7 +3944,8 @@ const openTemplateSession = async (user: any, templateName: string) => {
         tabTitle: getSessionTitle(user.uid, templateName),
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        draft: cloneTemplateConfig(template)
+        draft: cloneTemplateConfig(template),
+        submittedOnce: false
     }
     editSessions.value.push(session)
     lastSubmit.value = ''
@@ -3534,7 +3994,7 @@ const closeSessionTab = async (sessionId: string) => {
 
     const closing = editSessions.value[index]
     const savedTemplate = userConfigStore.getUserTemplate(closing.uid, closing.templateName)
-    if (savedTemplate && hasUnsavedChanges(savedTemplate, closing.draft)) {
+    if (!closing.submittedOnce && savedTemplate && hasUnsavedChanges(savedTemplate, closing.draft)) {
         try {
             await ElMessageBox.confirm(
                 `标签页 "${closing.tabTitle}" 有未保存修改，确定关闭吗？`,
@@ -4087,7 +4547,7 @@ const selectVideoWithTauri = async () => {
     try {
         const selected = await open({
             multiple: true,
-            defaultPath: getDefaultVideoDir() || undefined,
+            defaultPath: getDefaultVideoPickerDir() || undefined,
             filters: [
                 {
                     name: 'Video',
@@ -4124,14 +4584,14 @@ const selectVideoWithTauri = async () => {
                 const folder = firstPath
                     ? firstPath.split(/[/\\]/).slice(0, -1).join('\\')
                     : ''
-                if (folder) setDefaultVideoDir(folder)
+                if (folder) setDefaultVideoPickerDir(folder)
             }
         } else if (typeof selected === 'string') {
             const selectedPath = String(selected)
             added += await addVideoToCurrentForm(selectedPath)
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
             const folder = selectedPath.split(/[/\\]/).slice(0, -1).join('\\')
-            if (folder) setDefaultVideoDir(folder)
+            if (folder) setDefaultVideoPickerDir(folder)
         }
     } catch (error) {
         console.error('文件选择失败: ', error)
@@ -4384,7 +4844,12 @@ const submitTemplate = async () => {
         }
         return
     } else {
-        performTemplateSubmit(selectedUser.value.uid, currentTemplateName.value, currentForm.value)
+        performTemplateSubmit(
+            selectedUser.value.uid,
+            currentTemplateName.value,
+            currentForm.value,
+            activeSessionId.value
+        )
     }
 }
 
@@ -4574,13 +5039,16 @@ const exportLogs = async () => {
         const zipName = dateFilter
             ? `logs_export_${dateFilter.replace(/-/g, '')}.zip`
             : `logs_export_${localDate.replace(/-/g, '')}.zip`
+        const defaultExportDir = getDefaultLogExportDir()
 
         const savePath = await save({
-            defaultPath: zipName,
+            defaultPath: joinWinPath(defaultExportDir, zipName),
             filters: [{ name: 'ZIP', extensions: ['zip'] }]
         })
 
         if (savePath) {
+            const parent = getParentDir(savePath)
+            if (parent) setDefaultLogExportDir(parent)
             await utilsStore.exportLogs(savePath, dateFilter || undefined)
             console.log('日志导出成功：', savePath)
         }
@@ -5987,5 +6455,11 @@ body.sidebar-resizing {
 
 .interactive-confirm-dialog-checkbox input {
     cursor: pointer;
+}
+
+.folder-apply-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
 }
 </style>

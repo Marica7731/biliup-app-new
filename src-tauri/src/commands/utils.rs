@@ -6,6 +6,7 @@ use std::str::FromStr;
 use std::{fs, fs::File, io::Read, path::Path, path::PathBuf};
 use tauri::Manager;
 use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::utils::crypto::encode_base64;
@@ -383,81 +384,105 @@ pub async fn switch_season(
     )
     .map_err(|e| e.to_string())?;
 
-    if add {
-        match app_data
-        .clients
-        .lock()
-        .await
-        .get(&uid)
-        .ok_or("用户未登录或不存在")?
-        .bilibili
-        .client
-        .post(format!(
-            "https://member.bilibili.com/x2/creative/web/season/section/episodes/add?t={}&csrf={}",
-            chrono::Utc::now().timestamp(),
-            csrf
-        ))
-        .json(&json!({
-            "episodes": [
-                {
+    let retry_waits: [u64; 6] = [2, 3, 5, 8, 12, 15];
+    let max_attempts = retry_waits.len();
+    let mut last_err = String::new();
+
+    for idx in 0..max_attempts {
+        let attempt = idx + 1;
+        let req_result = if add {
+            app_data
+                .clients
+                .lock()
+                .await
+                .get(&uid)
+                .ok_or("用户未登录或不存在")?
+                .bilibili
+                .client
+                .post(format!(
+                    "https://member.bilibili.com/x2/creative/web/season/section/episodes/add?t={}&csrf={}",
+                    chrono::Utc::now().timestamp(),
+                    csrf
+                ))
+                .json(&json!({
+                    "episodes": [
+                        {
+                            "title": title,
+                            "aid": aid,
+                            "cid": cid
+                        }
+                    ],
+                    "sectionId": section_id,
+                    "csrf": csrf
+                }))
+                .send()
+                .await
+        } else {
+            app_data
+                .clients
+                .lock()
+                .await
+                .get(&uid)
+                .ok_or("用户未登录或不存在")?
+                .bilibili
+                .client
+                .post(format!(
+                    "https://member.bilibili.com/x2/creative/web/season/switch?t={}&csrf={}",
+                    chrono::Utc::now().timestamp(),
+                    csrf
+                ))
+                .json(&json!({
+                    "season_id": if season_id != 0 { Some(season_id) } else { None },
+                    "section_id": if section_id != 0 { Some(section_id) } else { None },
                     "title": title,
                     "aid": aid,
-                    "cid": cid
+                    "cid": cid,
+                    "csrf": csrf
+                }))
+                .send()
+                .await
+        };
+
+        match req_result {
+            Ok(resp) => match resp.json::<Value>().await {
+                Ok(res) => {
+                    let code = res["code"].as_i64().unwrap_or(-1);
+                    if code == 0 {
+                        debug!(
+                            "设置合集成功(第{}次): {}",
+                            attempt,
+                            serde_json::to_string(&res).unwrap_or_default()
+                        );
+                        return Ok(true);
+                    }
+                    last_err = format!(
+                        "code={}, msg={}, data={}",
+                        code,
+                        res["message"].as_str().unwrap_or(""),
+                        serde_json::to_string(&res["data"]).unwrap_or_default()
+                    );
+                    warn!("设置合集失败(第{}次): {}", attempt, last_err);
                 }
-            ],
-            "sectionId": section_id,
-            "csrf": csrf
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
-        .await
-        {
-            Ok(res) => {
-                debug!("设置合集成功：{res}");
-                Ok(true)
+                Err(e) => {
+                    last_err = format!("解析合集接口响应失败: {}", e);
+                    warn!("设置合集失败(第{}次): {}", attempt, last_err);
+                }
             },
-            Err(e) => Err(e.to_string()),
-        }
-    } else {
-        match app_data
-            .clients
-            .lock()
-            .await
-            .get(&uid)
-            .ok_or("用户未登录或不存在")?
-            .bilibili
-            .client
-            .post(format!(
-                "https://member.bilibili.com/x2/creative/web/season/switch?t={}&csrf={}",
-                chrono::Utc::now().timestamp(),
-                csrf
-            ))
-            .json(&json!({
-                "season_id": if season_id != 0 { Some(season_id) } else { None },
-                "section_id": if section_id != 0 { Some(section_id) } else { None },
-                "title": title,
-                "aid": aid,
-                "cid": cid,
-                "csrf": csrf
-            }))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?
-            .json::<Value>()
-            .await
-        {
-            Ok(res) => {
-                debug!("修改合集成功：{res}");
-                if res["code"].as_i64() != Some(0) {
-                    return Err(serde_json::to_string(&res).unwrap_or("未知错误".to_string()));
-                }
-                Ok(true)
+            Err(e) => {
+                last_err = format!("请求合集接口失败: {}", e);
+                warn!("设置合集失败(第{}次): {}", attempt, last_err);
             }
-            Err(e) => Err(e.to_string()),
+        }
+
+        if attempt < max_attempts {
+            sleep(Duration::from_secs(retry_waits[idx])).await;
         }
     }
+
+    Err(format!(
+        "设置合集重试{}次仍失败: aid={}, cid={}, season_id={}, section_id={}, add={}, last_error={}",
+        max_attempts, aid, cid, season_id, section_id, add, last_err
+    ))
 }
 
 /// 导出日志

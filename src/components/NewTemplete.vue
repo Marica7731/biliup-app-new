@@ -1,8 +1,8 @@
 <template>
     <div>
         <!-- 创建模板对话框 -->
-        <el-dialog v-model="showDialog" title="新建模板" width="500px">
-            <el-form :model="newTemplateForm" label-width="80px">
+        <el-dialog v-model="showDialog" title="新建模板" width="620px">
+            <el-form :model="newTemplateForm" label-width="98px">
                 <el-form-item label="选择用户">
                     <el-select v-model="newTemplateForm.userUid" placeholder="请选择用户">
                         <el-option
@@ -75,6 +75,29 @@
                         maxlength="50"
                     />
                 </el-form-item>
+
+                <el-form-item label="模板文件夹">
+                    <div class="folder-row">
+                        <el-input
+                            v-model="newTemplateForm.folderPath"
+                            placeholder="可选：选择包含标题/简介/标签/封面的文件夹"
+                            readonly
+                        />
+                        <el-button @click="pickContentFolder">选择文件夹</el-button>
+                        <el-button text @click="clearContentFolder">清除</el-button>
+                    </div>
+                    <div class="form-tip">创建后仅应用到当前标签页草稿（不自动保存模板）</div>
+                </el-form-item>
+
+                <el-form-item label="应用字段" v-if="newTemplateForm.folderPath">
+                    <el-checkbox-group v-model="newTemplateForm.applyFields">
+                        <el-checkbox value="cover">封面</el-checkbox>
+                        <el-checkbox value="desc">简介</el-checkbox>
+                        <el-checkbox value="tag">标签</el-checkbox>
+                        <el-checkbox value="source">来源</el-checkbox>
+                        <el-checkbox value="title">标题</el-checkbox>
+                    </el-checkbox-group>
+                </el-form-item>
             </el-form>
             <template #footer>
                 <span class="dialog-footer">
@@ -88,6 +111,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { open } from '@tauri-apps/plugin-dialog'
 import { useAuthStore } from '../stores/auth'
 import { useUserConfigStore } from '../stores/user_config'
 import { useUtilsStore } from '../stores/utils'
@@ -101,6 +125,12 @@ const props = defineProps<{
 const emit = defineEmits<{
     'update:modelValue': [value: boolean]
     'template-created': [userUid: number, templateName: string]
+    'apply-folder-to-template': [
+        userUid: number,
+        templateName: string,
+        folderPath: string,
+        options: { title: boolean; cover: boolean; desc: boolean; tag: boolean; source: boolean }
+    ]
 }>()
 
 // Stores
@@ -117,12 +147,16 @@ const showDialog = computed({
     set: value => emit('update:modelValue', value)
 })
 
+const DEFAULT_TEMPLATE_CONTENT_DIR_KEY = 'default-template-content-dir'
+
 const newTemplateForm = ref({
     userUid: null,
     name: '',
     templateType: 'blank', // 'blank' | 'bv'
     bvNumber: '',
-    actionType: 'copy' // 'edit' | 'copy'
+    actionType: 'copy', // 'edit' | 'copy'
+    folderPath: '',
+    applyFields: ['cover', 'desc', 'tag', 'source', 'title'] as string[]
 })
 
 // localStorage key for storing user preferences
@@ -193,7 +227,31 @@ const resetForm = () => {
     // 只重置输入字段，保留用户偏好设置
     newTemplateForm.value.name = ''
     newTemplateForm.value.bvNumber = ''
+    newTemplateForm.value.folderPath = ''
+    newTemplateForm.value.applyFields = ['cover', 'desc', 'tag', 'source', 'title']
     // 不重置 userUid, templateType, actionType，保持用户上次的选择
+}
+
+const pickContentFolder = async () => {
+    try {
+        const selected = await open({
+            directory: true,
+            multiple: false,
+            defaultPath: localStorage.getItem(DEFAULT_TEMPLATE_CONTENT_DIR_KEY) || undefined
+        })
+        if (!selected) return
+        const picked = String(selected)
+        newTemplateForm.value.folderPath = picked
+        localStorage.setItem(DEFAULT_TEMPLATE_CONTENT_DIR_KEY, picked)
+    } catch (error) {
+        console.error('选择文件夹失败:', error)
+        utilsStore.showMessage(`选择文件夹失败: ${error}`, 'error')
+    }
+}
+
+const clearContentFolder = () => {
+    newTemplateForm.value.folderPath = ''
+    newTemplateForm.value.applyFields = ['cover', 'desc', 'tag', 'source', 'title']
 }
 
 // 创建新模板
@@ -217,6 +275,16 @@ const createNewTemplate = async () => {
 
             utilsStore.showMessage('空白模板创建成功', 'success')
             emit('template-created', targetUserUid, templateName)
+            if (newTemplateForm.value.folderPath) {
+                const opts = new Set(newTemplateForm.value.applyFields || [])
+                emit('apply-folder-to-template', targetUserUid, templateName, newTemplateForm.value.folderPath, {
+                    title: opts.has('title'),
+                    cover: opts.has('cover'),
+                    desc: opts.has('desc'),
+                    tag: opts.has('tag'),
+                    source: opts.has('source')
+                })
+            }
         } else if (newTemplateForm.value.templateType === 'bv') {
             // BV/AV号模板
             if (!newTemplateForm.value.bvNumber.trim()) {
@@ -233,6 +301,16 @@ const createNewTemplate = async () => {
 
             utilsStore.showMessage('基于稿件创建模板成功', 'success')
             emit('template-created', targetUserUid, templateName)
+            if (newTemplateForm.value.folderPath) {
+                const opts = new Set(newTemplateForm.value.applyFields || [])
+                emit('apply-folder-to-template', targetUserUid, templateName, newTemplateForm.value.folderPath, {
+                    title: opts.has('title'),
+                    cover: opts.has('cover'),
+                    desc: opts.has('desc'),
+                    tag: opts.has('tag'),
+                    source: opts.has('source')
+                })
+            }
         }
 
         closeDialog()
@@ -329,5 +407,25 @@ defineExpose({
 .dialog-footer {
     display: flex;
     gap: 10px;
+}
+
+.folder-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.folder-row :deep(.el-input) {
+    min-width: 0;
+}
+
+.folder-row :deep(.el-button) {
+    white-space: nowrap;
+}
+
+:deep(.el-form-item__label) {
+    white-space: nowrap;
 }
 </style>

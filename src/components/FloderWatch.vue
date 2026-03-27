@@ -2,6 +2,8 @@
     <el-dialog
         v-model="visible"
         width="580px"
+        :modal="false"
+        :lock-scroll="false"
         :close-on-click-modal="!monitoring"
         :close-on-press-escape="!monitoring"
         :show-close="!monitoring"
@@ -475,7 +477,8 @@ const supportedFormats = [
     '.m4v'
 ]
 
-const DEFAULT_VIDEO_DIR_KEY = 'default-video-dir'
+const DEFAULT_WATCH_DIR_KEY = 'default-watch-dir'
+const LEGACY_VIDEO_DIR_KEY = 'default-video-dir'
 
 // 选择文件夹
 const selectFolder = async () => {
@@ -484,7 +487,10 @@ const selectFolder = async () => {
             directory: true,
             multiple: true, // 允许多选
             title: '选择要监控的文件夹',
-            defaultPath: localStorage.getItem(DEFAULT_VIDEO_DIR_KEY) || undefined
+            defaultPath:
+                localStorage.getItem(DEFAULT_WATCH_DIR_KEY) ||
+                localStorage.getItem(LEGACY_VIDEO_DIR_KEY) ||
+                undefined
         })
 
         if (selected) {
@@ -503,7 +509,7 @@ const selectFolder = async () => {
             }
             const firstFolder = Array.isArray(selected) ? selected[0] : selected
             if (firstFolder) {
-                localStorage.setItem(DEFAULT_VIDEO_DIR_KEY, firstFolder)
+                localStorage.setItem(DEFAULT_WATCH_DIR_KEY, firstFolder)
             }
         }
     } catch (error) {
