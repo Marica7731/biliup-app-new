@@ -1,9 +1,12 @@
 use biliup::bilibili::BiliBili;
 use serde_json::{Value, json};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use std::{fs::File, io::Read, path::Path};
+use std::{fs, fs::File, io::Read, path::Path, path::PathBuf};
 use tauri::Manager;
 use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::utils::crypto::encode_base64;
@@ -381,122 +384,234 @@ pub async fn switch_season(
     )
     .map_err(|e| e.to_string())?;
 
-    if add {
-        match app_data
-        .clients
-        .lock()
-        .await
-        .get(&uid)
-        .ok_or("用户未登录或不存在")?
-        .bilibili
-        .client
-        .post(format!(
-            "https://member.bilibili.com/x2/creative/web/season/section/episodes/add?t={}&csrf={}",
-            chrono::Utc::now().timestamp(),
-            csrf
-        ))
-        .json(&json!({
-            "episodes": [
-                {
+    let retry_waits: [u64; 6] = [2, 3, 5, 8, 12, 15];
+    let max_attempts = retry_waits.len();
+    let mut last_err = String::new();
+
+    for idx in 0..max_attempts {
+        let attempt = idx + 1;
+        let req_result = if add {
+            app_data
+                .clients
+                .lock()
+                .await
+                .get(&uid)
+                .ok_or("用户未登录或不存在")?
+                .bilibili
+                .client
+                .post(format!(
+                    "https://member.bilibili.com/x2/creative/web/season/section/episodes/add?t={}&csrf={}",
+                    chrono::Utc::now().timestamp(),
+                    csrf
+                ))
+                .json(&json!({
+                    "episodes": [
+                        {
+                            "title": title,
+                            "aid": aid,
+                            "cid": cid
+                        }
+                    ],
+                    "sectionId": section_id,
+                    "csrf": csrf
+                }))
+                .send()
+                .await
+        } else {
+            app_data
+                .clients
+                .lock()
+                .await
+                .get(&uid)
+                .ok_or("用户未登录或不存在")?
+                .bilibili
+                .client
+                .post(format!(
+                    "https://member.bilibili.com/x2/creative/web/season/switch?t={}&csrf={}",
+                    chrono::Utc::now().timestamp(),
+                    csrf
+                ))
+                .json(&json!({
+                    "season_id": if season_id != 0 { Some(season_id) } else { None },
+                    "section_id": if section_id != 0 { Some(section_id) } else { None },
                     "title": title,
                     "aid": aid,
-                    "cid": cid
+                    "cid": cid,
+                    "csrf": csrf
+                }))
+                .send()
+                .await
+        };
+
+        match req_result {
+            Ok(resp) => match resp.json::<Value>().await {
+                Ok(res) => {
+                    let code = res["code"].as_i64().unwrap_or(-1);
+                    if code == 0 {
+                        debug!(
+                            "设置合集成功(第{}次): {}",
+                            attempt,
+                            serde_json::to_string(&res).unwrap_or_default()
+                        );
+                        return Ok(true);
+                    }
+                    last_err = format!(
+                        "code={}, msg={}, data={}",
+                        code,
+                        res["message"].as_str().unwrap_or(""),
+                        serde_json::to_string(&res["data"]).unwrap_or_default()
+                    );
+                    warn!("设置合集失败(第{}次): {}", attempt, last_err);
                 }
-            ],
-            "sectionId": section_id,
-            "csrf": csrf
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
-        .await
-        {
-            Ok(res) => {
-                debug!("设置合集成功：{res}");
-                Ok(true)
+                Err(e) => {
+                    last_err = format!("解析合集接口响应失败: {}", e);
+                    warn!("设置合集失败(第{}次): {}", attempt, last_err);
+                }
             },
-            Err(e) => Err(e.to_string()),
-        }
-    } else {
-        match app_data
-            .clients
-            .lock()
-            .await
-            .get(&uid)
-            .ok_or("用户未登录或不存在")?
-            .bilibili
-            .client
-            .post(format!(
-                "https://member.bilibili.com/x2/creative/web/season/switch?t={}&csrf={}",
-                chrono::Utc::now().timestamp(),
-                csrf
-            ))
-            .json(&json!({
-                "season_id": if season_id != 0 { Some(season_id) } else { None },
-                "section_id": if section_id != 0 { Some(section_id) } else { None },
-                "title": title,
-                "aid": aid,
-                "cid": cid,
-                "csrf": csrf
-            }))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?
-            .json::<Value>()
-            .await
-        {
-            Ok(res) => {
-                debug!("修改合集成功：{res}");
-                if res["code"].as_i64() != Some(0) {
-                    return Err(serde_json::to_string(&res).unwrap_or("未知错误".to_string()));
-                }
-                Ok(true)
+            Err(e) => {
+                last_err = format!("请求合集接口失败: {}", e);
+                warn!("设置合集失败(第{}次): {}", attempt, last_err);
             }
-            Err(e) => Err(e.to_string()),
+        }
+
+        if attempt < max_attempts {
+            sleep(Duration::from_secs(retry_waits[idx])).await;
         }
     }
+
+    Err(format!(
+        "设置合集重试{}次仍失败: aid={}, cid={}, season_id={}, section_id={}, add={}, last_error={}",
+        max_attempts, aid, cid, season_id, section_id, add, last_err
+    ))
 }
 
 /// 导出日志
 #[tauri::command]
-pub async fn export_logs() -> Result<String, String> {
+pub async fn export_logs(export_path: String, date_filter: Option<String>) -> Result<String, String> {
     use std::fs;
     use std::io::Write;
     use zip::ZipWriter;
+    use chrono::{DateTime, Local, NaiveDate};
 
     let log_dir = crate::utils::get_log_path().map_err(|e| format!("获取日志目录失败: {e}"))?;
-
-    // 创建临时zip文件
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let zip_path = log_dir.join(format!("logs_export_{timestamp}.zip"));
-
-    let zip_file = fs::File::create(&zip_path).map_err(|e| format!("创建ZIP文件失败: {e}"))?;
+    let zip_file = fs::File::create(&export_path).map_err(|e| format!("创建ZIP文件失败: {e}"))?;
     let mut zip = ZipWriter::new(zip_file);
     let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
     // 添加日志文件
+    let parsed_filter = date_filter
+        .as_ref()
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+
+    let mut matched_files: Vec<String> = Vec::new();
+    let mut read_failed_files: Vec<String> = Vec::new();
+
     if let Ok(entries) = fs::read_dir(&log_dir) {
         for entry in entries.flatten() {
             if let Some(extension) = entry.path().extension() {
                 if extension == "log" {
                     let file_name = entry.file_name().to_string_lossy().to_string();
+                    if let Some(filter_date) = parsed_filter.as_ref() {
+                        let date_text = date_filter.as_deref().unwrap_or("");
+                        let mut include = file_name.contains(date_text);
+                        if !include {
+                            if let Ok(meta) = fs::metadata(entry.path()) {
+                                if let Ok(modified) = meta.modified() {
+                                    let local_time: DateTime<Local> = modified.into();
+                                    include = local_time.date_naive() == *filter_date;
+                                }
+                            }
+                        }
+                        if !include {
+                            if let Ok(bytes) = fs::read(entry.path()) {
+                                let content = String::from_utf8_lossy(&bytes);
+                                include = content.contains(date_text);
+                            }
+                        }
+                        if !include {
+                            continue;
+                        }
+                    }
                     if let Ok(content) = fs::read(entry.path()) {
                         zip.start_file(&file_name, options)
                             .map_err(|e| format!("创建ZIP条目失败: {e}"))?;
                         zip.write_all(&content)
                             .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
+                        matched_files.push(file_name.clone());
+                    } else {
+                        read_failed_files.push(file_name.clone());
                     }
                 }
             }
         }
     }
 
+    let manifest = format!(
+        "date_filter={}\nmatched_files={}\n{}\nread_failed_files={}\n{}\n",
+        date_filter.clone().unwrap_or_else(|| "ALL".to_string()),
+        matched_files.len(),
+        matched_files.join("\n"),
+        read_failed_files.len(),
+        read_failed_files.join("\n")
+    );
+    zip.start_file("export_manifest.txt", options)
+        .map_err(|e| format!("创建ZIP条目失败: {e}"))?;
+    zip.write_all(manifest.as_bytes())
+        .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
+
     zip.finish().map_err(|e| format!("完成ZIP文件失败: {e}"))?;
 
-    Ok(zip_path.to_string_lossy().to_string())
+    Ok(export_path)
+}
+
+#[tauri::command]
+pub async fn store_local_cover(
+    uid: u64,
+    key: String,
+    source_path: String,
+    is_folder: bool,
+) -> Result<String, String> {
+    let source = PathBuf::from(&source_path);
+    if !source.exists() {
+        return Err("封面文件不存在".to_string());
+    }
+
+    let ext = source
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("jpg")
+        .to_string();
+
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let hashed_key = format!("{:016x}", hasher.finish());
+
+    let cover_dir = crate::utils::get_config_dir()
+        .map_err(|e| format!("获取配置目录失败: {e}"))?
+        .join("covers")
+        .join(uid.to_string());
+    fs::create_dir_all(&cover_dir).map_err(|e| format!("创建封面目录失败: {e}"))?;
+
+    let target_name = if is_folder {
+        format!("folder_{}.{}", hashed_key, ext)
+    } else {
+        format!("template_{}.{}", hashed_key, ext)
+    };
+    let target_path = cover_dir.join(target_name);
+    info!(
+        "保存本地封面: uid={}, is_folder={}, source={}, target={}",
+        uid,
+        is_folder,
+        source.display(),
+        target_path.display()
+    );
+    fs::copy(&source, &target_path).map_err(|e| format!("保存封面文件失败: {e}"))?;
+    if !target_path.exists() {
+        return Err("封面文件保存后未找到目标文件".to_string());
+    }
+    Ok(target_path.to_string_lossy().to_string())
 }
 
 /// 检查更新

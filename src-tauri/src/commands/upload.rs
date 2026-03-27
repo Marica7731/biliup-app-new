@@ -107,10 +107,17 @@ pub async fn retry_upload(app: AppHandle, task_id: String) -> Result<bool, Strin
 pub async fn submit(app: AppHandle, uid: u64, form: TemplateConfig) -> Result<Value, String> {
     let app_lock = app.state::<Mutex<AppData>>();
     let app_data = app_lock.lock().await;
+    let is_edit = form.aid.is_some();
 
-    if form.aid.is_none() {
+    if !is_edit {
         // 将前端表单转换为B站API需要的格式
         let bilibili_form = form.into_bilibili_form();
+        info!(
+            "提交请求参数: uid={}, mode=web_add_v3, is_only_self={}, videos_count={}, aid=None",
+            uid,
+            bilibili_form.is_only_self,
+            bilibili_form.videos.len()
+        );
         let studio = bilibili_form.try_into_studio().map_err(|e| e.to_string())?;
 
         #[cfg(debug_assertions)]
@@ -147,6 +154,13 @@ pub async fn submit(app: AppHandle, uid: u64, form: TemplateConfig) -> Result<Va
         }
     } else {
         let bilibili_form = form.into_bilibili_form();
+        info!(
+            "提交请求参数: uid={}, mode=web_edit, is_only_self={}, videos_count={}, aid={:?}",
+            uid,
+            bilibili_form.is_only_self,
+            bilibili_form.videos.len(),
+            bilibili_form.aid
+        );
         let studio = bilibili_form.try_into_studio().map_err(|e| e.to_string())?;
         match app_data
             .clients

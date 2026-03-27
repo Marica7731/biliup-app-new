@@ -58,6 +58,8 @@ pub struct BilibiliForm {
     pub lossless_music: u8,
     /// 0-允许转载，1-禁止转载
     pub no_reprint: u8,
+    /// 可见性：0-公开，1-仅自己可见
+    pub is_only_self: u8,
     /// 是否开启充电, 0-关闭 1-开启
     pub charging_pay: u8,
     /// aid 要追加视频的 avid
@@ -117,8 +119,6 @@ impl TemplateConfig {
                 map.insert("topic_detail".to_string(), json!(topic_detail));
             }
 
-            map.insert("is_only_self".to_string(), json!(self.is_only_self));
-
             let watermark = Watermark {
                 state: self.watermark,
             };
@@ -155,6 +155,7 @@ impl TemplateConfig {
             dolby: self.dolby,
             lossless_music: self.lossless_music,
             no_reprint: self.no_reprint,
+            is_only_self: self.is_only_self,
             charging_pay: self.open_elec,
             aid: self.aid,
             up_selection_reply: self.up_selection_reply > 0,

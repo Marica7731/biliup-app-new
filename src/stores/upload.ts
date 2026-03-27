@@ -23,6 +23,92 @@ interface UploadTask {
 export const useUploadStore = defineStore('upload', () => {
     const uploadQueue = ref<UploadTask[]>([])
     const utilsStore = useUtilsStore()
+    const genericRetryScheduled = new Set<string>()
+    const stalledRetryCooldown = new Set<string>()
+    let rateLimitRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+    let rateLimitRecoveryTaskId: string | null = null
+
+    const isRateLimitError = (errorMessage?: string) => {
+        const msg = (errorMessage || '').toLowerCase()
+        return msg.includes('code: 601') || msg.includes('upload rate limit') || msg.includes('上传视频过快')
+    }
+
+    const cleanupRetryState = (queue: UploadTask[]) => {
+        const alive = new Set(queue.map(task => task.id))
+        for (const id of Array.from(genericRetryScheduled)) {
+            if (!alive.has(id)) {
+                genericRetryScheduled.delete(id)
+            }
+        }
+        for (const id of Array.from(stalledRetryCooldown)) {
+            if (!alive.has(id)) {
+                stalledRetryCooldown.delete(id)
+            }
+        }
+        if (rateLimitRecoveryTaskId && !alive.has(rateLimitRecoveryTaskId)) {
+            rateLimitRecoveryTaskId = null
+            if (rateLimitRecoveryTimer) {
+                clearTimeout(rateLimitRecoveryTimer)
+                rateLimitRecoveryTimer = null
+            }
+        }
+    }
+
+    const scheduleGenericRetry = (task: UploadTask) => {
+        if (genericRetryScheduled.has(task.id)) return
+        if ((task.retry_count || 0) >= 3) return
+        genericRetryScheduled.add(task.id)
+        setTimeout(async () => {
+            try {
+                await retryUpload(task.id, false)
+                utilsStore.showMessage(`${task.user.username}-${task.video.title} 自动重试中`)
+            } catch (error) {
+                console.error('通用失败自动重试失败:', error)
+            } finally {
+                genericRetryScheduled.delete(task.id)
+            }
+        }, 30000)
+    }
+
+    const scheduleRateLimitRecovery = (task: UploadTask) => {
+        if (rateLimitRecoveryTimer || rateLimitRecoveryTaskId) return
+        rateLimitRecoveryTaskId = task.id
+        utilsStore.showMessage(
+            `${task.user.username}-${task.video.title} 触发限速，10分钟后先重试该任务`
+        )
+        rateLimitRecoveryTimer = setTimeout(async () => {
+            const firstTaskId = rateLimitRecoveryTaskId
+            rateLimitRecoveryTaskId = null
+            rateLimitRecoveryTimer = null
+            if (!firstTaskId) return
+
+            try {
+                await retryUpload(firstTaskId, false)
+                await getUploadQueue()
+
+                const firstTask = uploadQueue.value.find(task => task.id === firstTaskId)
+                const firstStillRateLimited =
+                    firstTask && firstTask.status === 'Failed' && isRateLimitError(firstTask.error_message)
+
+                if (!firstStillRateLimited) {
+                    const failedTasks = uploadQueue.value.filter(
+                        task => task.status === 'Failed' && task.id !== firstTaskId
+                    )
+                    for (const failedTask of failedTasks) {
+                        await retryUpload(failedTask.id, false)
+                    }
+                    if (failedTasks.length > 0) {
+                        await getUploadQueue()
+                    }
+                    utilsStore.showMessage('限速恢复重试已执行')
+                } else {
+                    utilsStore.showMessage('限速仍存在，等待下一轮自动恢复', 'warning')
+                }
+            } catch (error) {
+                console.error('限速自动恢复失败:', error)
+            }
+        }, 10 * 60 * 1000)
+    }
 
     // 创建上传任务
     const createUploadTask = async (uid: number, template: string, videoFiles: any[]) => {
@@ -37,7 +123,21 @@ export const useUploadStore = defineStore('upload', () => {
                 }
                 if (!uploadQueue.value.some(task => task.id === video.id)) {
                     try {
-                        await invoke('create_upload_task', { uid, template, video })
+                        const normalizedVideo = {
+                            ...video,
+                            // 重新入队时清理旧上传态，避免携带历史cid导致提交异常（如21015）
+                            cid: 0,
+                            complete: false,
+                            status: 'Waiting',
+                            errorMessage: '',
+                            progress: 0,
+                            finished_at: 0
+                        }
+                        await invoke('create_upload_task', {
+                            uid,
+                            template,
+                            video: normalizedVideo
+                        })
                         count++
                     } catch (error) {
                         console.error('创建上传任务失败:', error)
@@ -116,6 +216,10 @@ export const useUploadStore = defineStore('upload', () => {
                         now - task.started_at! > 30000
                 )
                 .forEach(task => {
+                    if (stalledRetryCooldown.has(task.id)) {
+                        return
+                    }
+                    stalledRetryCooldown.add(task.id)
                     if (task.retry_count && task.retry_count >= 3) {
                         utilsStore.showMessage(
                             `${task.user.username}-${task.video.title} 超过 3 次重试，取消任务`
@@ -125,10 +229,26 @@ export const useUploadStore = defineStore('upload', () => {
                         utilsStore.showMessage(
                             `${task.user.username}-${task.video.title} 超过 30 秒未上传，正在重试...`
                         )
-                        task.retry_count = task.retry_count ? task.retry_count + 1 : 1
                         retryUpload(task.id, false)
                     }
+                    setTimeout(() => {
+                        stalledRetryCooldown.delete(task.id)
+                    }, 10000)
                 })
+
+            const failedTasks = queue.filter(task => task.status === 'Failed')
+            const rateLimitedTask = failedTasks.find(task => isRateLimitError(task.error_message))
+            if (rateLimitedTask) {
+                scheduleRateLimitRecovery(rateLimitedTask)
+            }
+
+            failedTasks
+                .filter(task => !isRateLimitError(task.error_message))
+                .forEach(task => {
+                    scheduleGenericRetry(task)
+                })
+
+            cleanupRetryState(queue)
 
             return queue
         } catch (error) {

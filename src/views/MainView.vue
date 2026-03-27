@@ -54,7 +54,7 @@
 
         <el-container class="main-container">
             <!-- 用户模板侧边栏 -->
-            <el-aside width="300px" class="sidebar">
+            <el-aside ref="sidebarRef" class="sidebar" :style="sidebarInlineStyle">
                 <div class="sidebar-header">
                     <h3></h3>
                     <div class="header-buttons">
@@ -137,82 +137,317 @@
 
                             <!-- 模板列表 -->
                             <div class="template-list" v-show="userTemplate.expanded">
+                                <div class="template-tools">
+                                    <el-select
+                                        size="small"
+                                        class="template-sort-select"
+                                        :model-value="getTemplateSortMode(userTemplate.user.uid)"
+                                        :disabled="templateLoading || userTemplate.user.expired"
+                                        @change="
+                                            (mode: string) =>
+                                                updateTemplateSortMode(userTemplate.user.uid, mode)
+                                        "
+                                    >
+                                        <el-option label="手动排序" value="manual" />
+                                        <el-option label="A-Z 排序" value="az" />
+                                    </el-select>
+                                    <el-button
+                                        size="small"
+                                        link
+                                        :disabled="templateLoading || userTemplate.user.expired"
+                                        @click.stop="createTemplateFolder(userTemplate.user.uid)"
+                                    >
+                                        新建模板夹
+                                    </el-button>
+                                </div>
                                 <div
-                                    v-for="template in userTemplate.templates"
-                                    :key="`${userTemplate.user.uid}-${template.name}`"
-                                    class="template-item"
+                                    v-for="item in getTemplateRenderItems(
+                                        userTemplate.user.uid,
+                                        userTemplate.templates
+                                    )"
+                                    :key="`${userTemplate.user.uid}-${item.id}`"
+                                    class="template-entry"
                                     :class="{
-                                        active:
-                                            selectedUser?.uid === userTemplate.user.uid &&
-                                            currentTemplateName === template.name,
-                                        'auto-submitting':
-                                            highlightAutoSubmitting &&
-                                            autoSubmittingRecord[
-                                                getTemplateKey(userTemplate.user.uid, template.name)
-                                            ],
-                                        'auto-submitting-simple':
-                                            !highlightAutoSubmitting &&
-                                            autoSubmittingRecord[
-                                                getTemplateKey(userTemplate.user.uid, template.name)
-                                            ],
-                                        'template-loading':
-                                            templateLoading &&
-                                            selectedUser?.uid === userTemplate.user.uid &&
-                                            currentTemplateName === template.name,
-                                        disabled: templateLoading || userTemplate.user.expired
+                                        'entry-folder': item.kind === 'folder',
+                                        'entry-template': item.kind === 'template'
                                     }"
-                                    @click="
-                                        handleTemplateSelection(userTemplate.user, template.name)
-                                    "
                                 >
-                                    <div class="template-main">
-                                        <div class="template-name">
-                                            {{ template.name }}
-                                            <span
-                                                v-show="
-                                                    checkTemplateHasUnsavedChanges(
-                                                        userTemplate.user.uid,
-                                                        template.name
+                                    <div
+                                        v-if="item.kind === 'folder'"
+                                        class="template-folder-header"
+                                        @click="
+                                            toggleFolderCollapsed(
+                                                userTemplate.user.uid,
+                                                item.folderId
+                                            )
+                                        "
+                                    >
+                                        <div class="template-folder-info">
+                                            <img
+                                                class="template-folder-cover"
+                                                :src="
+                                                    resolveCoverSrc(
+                                                        getFolderCoverPath(
+                                                            userTemplate.user.uid,
+                                                            item.folderId
+                                                        ),
+                                                        'folder'
                                                     )
                                                 "
-                                                class="unsaved-indicator"
-                                                title="有未保存的修改"
-                                            ></span>
+                                                @error="
+                                                    event =>
+                                                        handleCoverError(
+                                                            event,
+                                                            getFolderCoverPath(
+                                                                userTemplate.user.uid,
+                                                                item.folderId
+                                                            ),
+                                                            'folder'
+                                                        )
+                                                "
+                                            />
+                                            <span class="template-folder-title">
+                                                {{ item.name }}
+                                                <small>({{ item.count }})</small>
+                                            </span>
                                         </div>
-                                        <div class="template-desc">
-                                            {{ template.config.title || '无标题' }}
+                                        <div class="template-folder-actions" @click.stop>
+                                            <el-icon
+                                                class="folder-toggle-icon"
+                                                :class="{
+                                                    collapsed: isFolderCollapsed(
+                                                        userTemplate.user.uid,
+                                                        item.folderId
+                                                    )
+                                                }"
+                                            >
+                                                <arrow-down />
+                                            </el-icon>
+                                            <el-dropdown
+                                                trigger="click"
+                                                :disabled="templateLoading || userTemplate.user.expired"
+                                            >
+                                                <el-button link size="small">管理</el-button>
+                                                <template #dropdown>
+                                                    <el-dropdown-menu>
+                                                        <el-dropdown-item
+                                                            @click.stop="
+                                                                selectFolderCover(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >设置封面</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
+                                                            @click.stop="
+                                                                clearFolderCoverPath(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >清除封面</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
+                                                            @click.stop="
+                                                                renameTemplateFolder(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >重命名</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
+                                                            divided
+                                                            @click.stop="
+                                                                deleteTemplateFolder(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >删除</el-dropdown-item
+                                                        >
+                                                    </el-dropdown-menu>
+                                                </template>
+                                            </el-dropdown>
                                         </div>
                                     </div>
-                                    <el-dropdown
-                                        @command="
-                                            (command: string) =>
-                                                handleTemplateCommand(
-                                                    command,
-                                                    userTemplate.user,
-                                                    template
-                                                )
+                                    <div
+                                        v-else
+                                        class="template-item"
+                                        :class="{
+                                            active:
+                                                selectedUser?.uid === userTemplate.user.uid &&
+                                                currentTemplateName === item.template.name,
+                                            'auto-submitting':
+                                                highlightAutoSubmitting &&
+                                                isTemplateAutoSubmitting(
+                                                    userTemplate.user.uid,
+                                                    item.template.name
+                                                ),
+                                            'auto-submitting-simple':
+                                                !highlightAutoSubmitting &&
+                                                isTemplateAutoSubmitting(
+                                                    userTemplate.user.uid,
+                                                    item.template.name
+                                                ),
+                                            'template-loading':
+                                                templateLoading &&
+                                                selectedUser?.uid === userTemplate.user.uid &&
+                                                currentTemplateName === item.template.name,
+                                            disabled: templateLoading || userTemplate.user.expired,
+                                            'template-item-in-folder': item.folderId
+                                        }"
+                                        @click="
+                                            handleTemplateSelection(
+                                                userTemplate.user,
+                                                item.template.name,
+                                                $event
+                                            )
                                         "
-                                        @click.stop
-                                        trigger="click"
-                                        :disabled="templateLoading"
+                                        :draggable="
+                                            isTemplateDragEnabled(
+                                                userTemplate.user.uid,
+                                                userTemplate.user.expired
+                                            )
+                                        "
+                                        @dragstart="
+                                            onTemplateDragStart(
+                                                $event,
+                                                userTemplate.user.uid,
+                                                item.template.name,
+                                                item.folderId
+                                            )
+                                        "
+                                        @dragend="onTemplateDragEnd"
+                                        @dragover.prevent="
+                                            onTemplateDragOver(
+                                                $event,
+                                                userTemplate.user.uid,
+                                                item.template.name,
+                                                item.folderId
+                                            )
+                                        "
+                                        @drop.prevent="
+                                            onTemplateDrop(
+                                                $event,
+                                                userTemplate.user.uid,
+                                                item.template.name,
+                                                item.folderId
+                                            )
+                                        "
                                     >
-                                        <el-button link size="small" class="template-menu-btn">
-                                            <el-icon><more-filled /></el-icon>
-                                        </el-button>
-                                        <template #dropdown>
-                                            <el-dropdown-menu>
-                                                <el-dropdown-item command="duplicate"
-                                                    >复制</el-dropdown-item
-                                                >
-                                                <el-dropdown-item command="rename"
-                                                    >重命名</el-dropdown-item
-                                                >
-                                                <el-dropdown-item command="delete" divided
-                                                    >删除</el-dropdown-item
-                                                >
-                                            </el-dropdown-menu>
-                                        </template>
-                                    </el-dropdown>
+                                        <img
+                                            class="template-cover"
+                                            :style="templateCoverStyle"
+                                            :src="
+                                                resolveCoverSrc(
+                                                    getTemplateCoverPath(
+                                                        userTemplate.user.uid,
+                                                        item.template.name
+                                                    ),
+                                                    'template'
+                                                )
+                                            "
+                                            @error="
+                                                event =>
+                                                    handleCoverError(
+                                                        event,
+                                                        getTemplateCoverPath(
+                                                            userTemplate.user.uid,
+                                                            item.template.name
+                                                        ),
+                                                        'template'
+                                                    )
+                                            "
+                                        />
+                                        <div class="template-main">
+                                            <div class="template-name">
+                                                {{ item.template.name }}
+                                                <span
+                                                    v-show="
+                                                        checkTemplateHasUnsavedChanges(
+                                                            userTemplate.user.uid,
+                                                            item.template.name
+                                                        )
+                                                    "
+                                                    class="unsaved-indicator"
+                                                    title="有未保存的修改"
+                                                ></span>
+                                            </div>
+                                            <div class="template-desc">
+                                                {{ item.template.config.title || '无标题' }}
+                                            </div>
+                                        </div>
+                                        <el-dropdown
+                                            @command="
+                                                (command: string) =>
+                                                    handleTemplateCommand(
+                                                        command,
+                                                        userTemplate.user,
+                                                        item.template,
+                                                        item.folderId
+                                                    )
+                                            "
+                                            @click.stop
+                                            @mousedown.stop
+                                            trigger="click"
+                                            :disabled="templateLoading"
+                                        >
+                                            <el-button
+                                                link
+                                                size="small"
+                                                class="template-menu-btn"
+                                                @click.stop
+                                                @mousedown.stop
+                                            >
+                                                <el-icon><more-filled /></el-icon>
+                                            </el-button>
+                                            <template #dropdown>
+                                                <el-dropdown-menu>
+                                                    <el-dropdown-item command="duplicate"
+                                                        >复制</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="rename"
+                                                        >重命名</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move"
+                                                        >移动到模板夹</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move_root"
+                                                        >移出模板夹</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="set_cover"
+                                                        >设置封面</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="clear_cover"
+                                                        >清除封面</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move_up"
+                                                        >上移</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="move_down"
+                                                        >下移</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item command="delete" divided
+                                                        >删除</el-dropdown-item
+                                                    >
+                                                </el-dropdown-menu>
+                                            </template>
+                                        </el-dropdown>
+                                    </div>
+                                </div>
+
+                                <div
+                                    v-if="
+                                        !getTemplateRenderItems(
+                                            userTemplate.user.uid,
+                                            userTemplate.templates
+                                        ).length
+                                    "
+                                    class="empty-folder"
+                                >
+                                    暂无模板
                                 </div>
 
                                 <div v-if="userTemplate.user.expired" class="expired-mask">
@@ -244,9 +479,16 @@
                     </div>
                 </div>
             </el-aside>
+            <div
+                class="sidebar-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                title="拖动调整模板栏宽度"
+                @pointerdown="startSidebarResize"
+            ></div>
 
             <!-- 主要内容区域 -->
-            <el-main class="main-content" v-if="currentForm">
+            <el-main class="main-content">
                 <div class="content-wrapper" ref="contentWrapperRef">
                     <div v-if="!selectedUser" class="no-selection">
                         <el-empty description="请选择用户和模板开始使用" />
@@ -260,7 +502,32 @@
                         </el-empty>
                     </div>
 
-                    <div v-else class="upload-form-container">
+                    <div v-else-if="currentForm" class="upload-form-container">
+                        <el-tabs
+                            v-model="activeSessionId"
+                            type="card"
+                            class="editor-tabs"
+                            closable
+                            @tab-remove="closeSessionTab"
+                            @tab-click="handleSessionTabClick"
+                        >
+                            <el-tab-pane
+                                v-for="session in editSessions"
+                                :key="session.id"
+                                :name="session.id"
+                            >
+                                <template #label>
+                                    <span
+                                        class="editor-tab-label"
+                                        :class="{ 'auto-submit-tab': isSessionAutoSubmitting(session.id) }"
+                                        @mousedown.middle.prevent
+                                        @mouseup="event => handleTabLabelMouseup(event, session.id)"
+                                    >
+                                        {{ session.tabTitle }}
+                                    </span>
+                                </template>
+                            </el-tab-pane>
+                        </el-tabs>
                         <div class="form-header">
                             <div class="template-name-container">
                                 <h3 class="edit-bv-template-disaplay" v-if="currentTemplate?.aid">
@@ -310,6 +577,12 @@
                                 />
                             </div>
                             <div class="header-actions">
+                                <el-button
+                                    @click="openFolderApplyDialogForCurrent"
+                                    :disabled="templateLoading"
+                                >
+                                    选择模板文件夹
+                                </el-button>
                                 <el-button @click="resetTemplate" :disabled="templateLoading"
                                     >放弃更改</el-button
                                 >
@@ -345,6 +618,16 @@
                                     <div class="card-header" @click="toggleCardCollapsed('basic')">
                                         <span>基本信息</span>
                                         <div class="header-actions">
+                                            <el-button
+                                                type="primary"
+                                                text
+                                                size="small"
+                                                @click.stop="openFolderApplyDialogForCurrent"
+                                                title="选择模板文件夹并应用到当前标签页"
+                                                :disabled="templateLoading"
+                                            >
+                                                选择模板文件夹
+                                            </el-button>
                                             <el-button
                                                 type="danger"
                                                 text
@@ -778,20 +1061,13 @@
                                                 type="datetime"
                                                 placeholder="选择发布时间"
                                                 format="YYYY-MM-DD HH:mm:ss"
+                                                :default-value="scheduleDefaultDate"
                                                 :disabled="templateLoading"
                                                 :disabled-date="
                                                     (date: Date) => {
-                                                        const now = new Date()
-                                                        const twoHoursLater = new Date(
-                                                            now.getTime() + 2 * 60 * 60 * 1000
-                                                        )
-                                                        const fifteenDaysLater = new Date(
-                                                            now.getTime() + 15 * 24 * 60 * 60 * 1000
-                                                        )
-
                                                         return (
-                                                            date < twoHoursLater ||
-                                                            date > fifteenDaysLater
+                                                            date < schedulePickerMinDay ||
+                                                            date > schedulePickerMaxDay
                                                         )
                                                     }
                                                 "
@@ -959,6 +1235,9 @@
                             </div>
                         </el-form>
                     </div>
+                    <div v-else class="no-template">
+                        <el-empty description="当前标签页草稿不可用，请重新打开模板" />
+                    </div>
                 </div>
             </el-main>
         </el-container>
@@ -968,7 +1247,67 @@
             ref="newTemplateRef"
             v-model="showNewTemplateDialog"
             @template-created="handleTemplateCreated"
+            @apply-folder-to-template="handleApplyFolderToTemplateFromDialog"
         />
+
+        <el-dialog v-model="showFolderApplyDialog" title="选择模板文件夹" width="560px">
+            <el-form label-width="90px">
+                <el-form-item label="目标模板">
+                    <el-input :model-value="folderApplyTemplateLabel" readonly />
+                </el-form-item>
+                <el-form-item label="文件夹">
+                    <div class="folder-apply-row">
+                        <el-input
+                            v-model="folderApplyPath"
+                            readonly
+                            placeholder="请选择模板文件夹（仅应用到当前标签页草稿）"
+                        />
+                        <el-button @click="selectFolderApplyPath">选择模板文件夹</el-button>
+                    </div>
+                </el-form-item>
+                <el-form-item label="应用字段">
+                    <el-checkbox-group v-model="folderApplyFields">
+                        <el-checkbox value="cover">封面</el-checkbox>
+                        <el-checkbox value="desc">简介</el-checkbox>
+                        <el-checkbox value="tag">标签</el-checkbox>
+                        <el-checkbox value="source">来源</el-checkbox>
+                        <el-checkbox value="title">标题</el-checkbox>
+                    </el-checkbox-group>
+                </el-form-item>
+            </el-form>
+            <template #footer>
+                <el-button @click="showFolderApplyDialog = false">取消</el-button>
+                <el-button type="primary" @click="confirmFolderApplyDialog">应用</el-button>
+            </template>
+        </el-dialog>
+
+        <!-- 移动模板到模板夹 -->
+        <el-dialog v-model="moveDialogVisible" title="移动到模板夹" width="420px">
+            <div class="move-dialog-content">
+                <el-select
+                    v-model="moveDialogTargetFolderId"
+                    placeholder="选择模板夹"
+                    class="move-dialog-select"
+                >
+                    <el-option label="未分组" value="" />
+                    <el-option
+                        v-for="folder in getUserOrganizer(moveDialogUserUid || 0).folders"
+                        :key="folder.id"
+                        :label="folder.name"
+                        :value="folder.id"
+                    />
+                </el-select>
+                <el-button size="small" @click="createFolderFromMoveDialog">
+                    新建模板夹
+                </el-button>
+            </div>
+            <template #footer>
+                <div class="dialog-footer">
+                    <el-button @click="moveDialogVisible = false">取消</el-button>
+                    <el-button type="primary" @click="confirmMoveDialog">确定</el-button>
+                </div>
+            </template>
+        </el-dialog>
 
         <!-- 登录对话框 -->
         <el-dialog
@@ -1034,7 +1373,8 @@ import {
     QuestionFilled
 } from '@element-plus/icons-vue'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { copyFile, remove } from '@tauri-apps/plugin-fs'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { readFile, stat } from '@tauri-apps/plugin-fs'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import LoginView from '../components/LoginView.vue'
@@ -1054,6 +1394,60 @@ const userConfigStore = useUserConfigStore()
 const uploadStore = useUploadStore()
 const utilsStore = useUtilsStore()
 
+type SortMode = 'manual' | 'az'
+
+interface TemplateFolder {
+    id: string
+    name: string
+    order: string[]
+    collapsed?: boolean
+    coverPath?: string
+}
+
+interface UserTemplateOrganizer {
+    sortMode: SortMode
+    ungroupedOrder: string[]
+    folders: TemplateFolder[]
+    templateCovers?: Record<string, string>
+}
+
+interface TemplateRenderItemFolder {
+    kind: 'folder'
+    id: string
+    folderId: string
+    name: string
+    count: number
+}
+
+interface TemplateRenderItemTemplate {
+    kind: 'template'
+    id: string
+    folderId?: string
+    template: { name: string; config: TemplateConfig }
+}
+
+type TemplateRenderItem = TemplateRenderItemFolder | TemplateRenderItemTemplate
+
+interface TemplateEditSession {
+    id: string
+    uid: number
+    username: string
+    templateName: string
+    tabTitle: string
+    createdAt: number
+    updatedAt: number
+    draft: TemplateConfig
+    submittedOnce?: boolean
+}
+
+interface FolderApplyOptions {
+    title: boolean
+    cover: boolean
+    desc: boolean
+    tag: boolean
+    source: boolean
+}
+
 // 计算属性
 const loginUsers = computed(() => authStore.loginUsers)
 const userTemplates = computed(() => userConfigStore.userTemplates)
@@ -1068,13 +1462,20 @@ const coverLoading = ref<boolean>(false)
 // 响应式数据
 const selectedUser = ref<any>(null)
 const currentTemplateName = ref<string>('')
+const editSessions = ref<TemplateEditSession[]>([])
+const activeSessionId = ref<string>('')
 const showNewTemplateDialog = ref(false)
 const showLoginDialog = ref(false)
 const showGlobalConfigDialog = ref(false)
+const showFolderApplyDialog = ref(false)
 const loginLoading = ref(false)
 const uploading = ref(false)
 const submitting = ref(false)
 const templateLoading = ref(false) // 模板加载状态锁
+const folderApplyUid = ref<number | null>(null)
+const folderApplyTemplateName = ref('')
+const folderApplyPath = ref('')
+const folderApplyFields = ref<string[]>(['cover', 'desc', 'tag', 'source'])
 
 // 视频状态对话框
 const showVideoStatusDialog = ref(false)
@@ -1086,8 +1487,17 @@ const newTemplateRef = ref<InstanceType<typeof NewTemplete> | null>(null)
 const tagViewRef = ref<InstanceType<typeof TagView> | null>(null)
 // 自动提交状态记录 - 记录每个模板的自动提交状态
 const autoSubmittingRecord = ref<Record<string, boolean>>({})
+const autoSubmitReadySince = ref<Record<string, number>>({})
+const autoSubmitInProgress = ref<Record<string, boolean>>({})
+const autoSubmitRetryCount = ref<Record<string, number>>({})
 // 全局自动提交检查间隔
 let autoSubmitInterval: number | null = null
+
+const folderApplyTemplateLabel = computed(() => {
+    if (!folderApplyTemplateName.value) return ''
+    const user = loginUsers.value.find(u => u.uid === folderApplyUid.value)
+    return user ? `${user.username} / ${folderApplyTemplateName.value}` : folderApplyTemplateName.value
+})
 
 // 高亮显示自动提交状态的开关
 const highlightAutoSubmitting = ref<boolean>(
@@ -1099,23 +1509,1071 @@ watch(highlightAutoSubmitting, newValue => {
     localStorage.setItem('highlightAutoSubmitting', String(newValue))
 })
 
-// 生成模板键名
-const getTemplateKey = (uid: number, templateName: string) => `${uid}-${templateName}`
+watch(
+    () => showGlobalConfigDialog.value,
+    newValue => {
+        if (!newValue) {
+            reloadLocalUiSettings()
+        }
+    }
+)
+
+const TEMPLATE_ORGANIZER_KEY = 'template-organizer-v1'
+const TEMPLATE_COVER_DEFAULT_KEY = 'template-cover-default'
+const FOLDER_COVER_DEFAULT_KEY = 'folder-cover-default'
+const TEMPLATE_SESSIONS_KEY = 'template-edit-sessions-v1'
+const TEMPLATE_TAB_MAX_KEY = 'template-tab-max'
+const TEMPLATE_COVER_SIZE_KEY = 'template-cover-size'
+const SIDEBAR_WIDTH_KEY = 'template-sidebar-width'
+const SIDEBAR_MIN_WIDTH = 280
+const DEFAULT_TEMPLATE_COVER = '/noface.jpg'
+const DEFAULT_FOLDER_COVER = '/tauri.svg'
+const templateOrganizer = ref<Record<number, UserTemplateOrganizer>>({})
+const coverVersionMap = ref<Record<string, number>>({})
+const sidebarRef = ref<any>(null)
+const sidebarWidth = ref<number>(320)
+let sidebarResizeCleanup: (() => void) | null = null
+const moveDialogVisible = ref(false)
+const moveDialogUserUid = ref<number | null>(null)
+const moveDialogTemplateName = ref<string>('')
+const moveDialogTemplateFolderId = ref<string | null>(null)
+const moveDialogTargetFolderId = ref<string>('')
+
+let sessionPersistTimer: number | null = null
+const templateCoverSizeValue = ref(48)
+const draggingTemplate = ref<{
+    uid: number
+    templateName: string
+    folderId?: string
+} | null>(null)
+
+const getTemplateTabMax = () => {
+    const raw = Number.parseInt(localStorage.getItem(TEMPLATE_TAB_MAX_KEY) || '', 10)
+    if (!Number.isFinite(raw)) return 15
+    return Math.min(30, Math.max(3, raw))
+}
+
+const getTemplateCoverSize = () => {
+    const raw = Number.parseInt(localStorage.getItem(TEMPLATE_COVER_SIZE_KEY) || '', 10)
+    if (!Number.isFinite(raw)) return 48
+    return Math.min(96, Math.max(40, raw))
+}
+
+const reloadLocalUiSettings = () => {
+    templateCoverSizeValue.value = getTemplateCoverSize()
+}
+
+const templateCoverStyle = computed(() => {
+    const size = templateCoverSizeValue.value
+    return {
+        width: `${size}px`,
+        height: `${size}px`
+    }
+})
+
+const cloneTemplateConfig = (template?: TemplateConfig | null): TemplateConfig => {
+    return JSON.parse(JSON.stringify(template || userConfigStore.createDefaultTemplate()))
+}
+
+const touchActiveSession = () => {
+    const session = editSessions.value.find(item => item.id === activeSessionId.value)
+    if (!session) return
+    session.updatedAt = Date.now()
+}
+
+const persistSessionsNow = () => {
+    try {
+        const payload = {
+            activeSessionId: activeSessionId.value,
+            sessions: editSessions.value
+        }
+        localStorage.setItem(TEMPLATE_SESSIONS_KEY, JSON.stringify(payload))
+    } catch (error) {
+        console.error('保存编辑会话失败:', error)
+    }
+}
+
+const schedulePersistSessions = () => {
+    if (sessionPersistTimer) {
+        clearTimeout(sessionPersistTimer)
+    }
+    sessionPersistTimer = window.setTimeout(() => {
+        persistSessionsNow()
+    }, 200)
+}
+
+const getDefaultOrganizer = (): UserTemplateOrganizer => ({
+    sortMode: 'manual',
+    ungroupedOrder: [],
+    folders: [],
+    templateCovers: {}
+})
+
+const saveTemplateOrganizer = () => {
+    localStorage.setItem(TEMPLATE_ORGANIZER_KEY, JSON.stringify(templateOrganizer.value))
+}
+
+const loadTemplateOrganizer = () => {
+    try {
+        const raw = localStorage.getItem(TEMPLATE_ORGANIZER_KEY)
+        if (!raw) return
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object') {
+            templateOrganizer.value = parsed
+        }
+    } catch (error) {
+        console.error('读取模板排序/模板夹配置失败:', error)
+    }
+}
+
+const clampSidebarWidth = (width: number) => {
+    const maxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(window.innerWidth * 0.6))
+    return Math.min(maxWidth, Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width)))
+}
+
+const loadSidebarWidth = () => {
+    const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY)
+    if (!raw) {
+        sidebarWidth.value = clampSidebarWidth(320)
+        return
+    }
+    const parsed = Number.parseInt(raw, 10)
+    sidebarWidth.value = Number.isFinite(parsed) ? clampSidebarWidth(parsed) : clampSidebarWidth(320)
+}
+
+const saveSidebarWidth = () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
+}
+
+const sidebarInlineStyle = computed(() => ({
+    width: `${sidebarWidth.value}px`,
+    flex: `0 0 ${sidebarWidth.value}px`
+}))
+
+const startSidebarResize = (event: PointerEvent) => {
+    const sidebarElement = sidebarRef.value?.$el || sidebarRef.value
+    if (!sidebarElement || typeof sidebarElement.getBoundingClientRect !== 'function') return
+    event.preventDefault()
+    ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+    const startX = event.clientX
+    const startWidth = sidebarElement.getBoundingClientRect().width
+
+    const onMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX
+        sidebarWidth.value = clampSidebarWidth(startWidth + delta)
+    }
+
+    const onUp = async (upEvent: PointerEvent) => {
+        ;(event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(upEvent.pointerId)
+        document.body.classList.remove('sidebar-resizing')
+        saveSidebarWidth()
+        await utilsStore.log('log', `模板栏宽度已调整: ${sidebarWidth.value}px`)
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+    }
+
+    document.body.classList.add('sidebar-resizing')
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+}
+
+const getUserOrganizer = (uid: number): UserTemplateOrganizer => {
+    if (!templateOrganizer.value[uid]) {
+        templateOrganizer.value[uid] = getDefaultOrganizer()
+    }
+    return templateOrganizer.value[uid]
+}
+
+const ensureTemplateInOrganizer = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    const existsInFolder = organizer.folders.some(folder => folder.order.includes(templateName))
+    const existsInRoot = organizer.ungroupedOrder.includes(templateName)
+    if (!existsInFolder && !existsInRoot) {
+        organizer.ungroupedOrder.push(templateName)
+    }
+}
+
+const removeTemplateFromOrganizer = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    organizer.ungroupedOrder = organizer.ungroupedOrder.filter(name => name !== templateName)
+    organizer.folders.forEach(folder => {
+        folder.order = folder.order.filter(name => name !== templateName)
+    })
+}
+
+const sanitizeUserOrganizer = (
+    uid: number,
+    templates: Array<{ name: string; config: TemplateConfig }>
+) => {
+    const organizer = getUserOrganizer(uid)
+    const existingNames = new Set(templates.map(t => t.name))
+    const seen = new Set<string>()
+
+    organizer.folders = organizer.folders.map(folder => {
+        const uniqueOrder: string[] = []
+        for (const name of folder.order) {
+            if (!existingNames.has(name) || seen.has(name)) continue
+            if (!uniqueOrder.includes(name)) {
+                uniqueOrder.push(name)
+                seen.add(name)
+            }
+        }
+        return {
+            ...folder,
+            collapsed: folder.collapsed ?? true,
+            coverPath: folder.coverPath || '',
+            order: uniqueOrder
+        }
+    })
+
+    organizer.ungroupedOrder = organizer.ungroupedOrder.filter(name => {
+        if (!existingNames.has(name) || seen.has(name)) return false
+        seen.add(name)
+        return true
+    })
+
+    for (const template of templates) {
+        if (!seen.has(template.name)) {
+            organizer.ungroupedOrder.push(template.name)
+            seen.add(template.name)
+        }
+    }
+
+    organizer.templateCovers = organizer.templateCovers || {}
+    templateOrganizer.value[uid] = organizer
+}
+
+const syncTemplateOrganizer = () => {
+    for (const userTemplate of userTemplates.value) {
+        sanitizeUserOrganizer(userTemplate.user.uid, userTemplate.templates)
+    }
+    saveTemplateOrganizer()
+}
+
+const getTemplateSortMode = (uid: number): SortMode => getUserOrganizer(uid).sortMode
+
+const updateTemplateSortMode = (uid: number, mode: string) => {
+    const organizer = getUserOrganizer(uid)
+    organizer.sortMode = mode === 'az' ? 'az' : 'manual'
+    saveTemplateOrganizer()
+}
+
+const selectTemplateCover = async (uid: number, templateName: string) => {
+    try {
+        const selected = await open({
+            multiple: false,
+            defaultPath: getDefaultCoverDir() || undefined,
+            filters: [
+                {
+                    name: 'Image',
+                    extensions: ['jpg', 'jpeg', 'png', 'pjp', 'pjpeg', 'jiff', 'gif']
+                }
+            ]
+        })
+        if (!selected || selected.length === 0) {
+            utilsStore.showMessage('未选择任何封面文件', 'warning')
+            return
+        }
+        const path = Array.isArray(selected) ? selected[0] : selected
+        const storedPath = await invoke<string>('store_local_cover', {
+            uid,
+            key: templateName,
+            sourcePath: path,
+            isFolder: false
+        })
+        await stat(storedPath)
+        setTemplateCoverPath(uid, templateName, storedPath)
+        const folder = path.split(/[/\\]/).slice(0, -1).join('\\')
+        if (folder) setDefaultCoverDir(folder)
+        await utilsStore.log(
+            'log',
+            `模板封面已更新: uid=${uid}, template=${templateName}, path=${storedPath}`
+        )
+        utilsStore.showMessage('模板封面已更新', 'success')
+    } catch (error) {
+        console.error('模板封面选择失败:', error)
+        utilsStore.showMessage(`模板封面选择失败: ${error}`, 'error')
+    }
+}
+
+const selectFolderCover = async (uid: number, folderId: string) => {
+    try {
+        const selected = await open({
+            multiple: false,
+            defaultPath: getDefaultCoverDir() || undefined,
+            filters: [
+                {
+                    name: 'Image',
+                    extensions: ['jpg', 'jpeg', 'png', 'pjp', 'pjpeg', 'jiff', 'gif']
+                }
+            ]
+        })
+        if (!selected || selected.length === 0) {
+            utilsStore.showMessage('未选择任何封面文件', 'warning')
+            return
+        }
+        const path = Array.isArray(selected) ? selected[0] : selected
+        const storedPath = await invoke<string>('store_local_cover', {
+            uid,
+            key: folderId,
+            sourcePath: path,
+            isFolder: true
+        })
+        await stat(storedPath)
+        setFolderCoverPath(uid, folderId, storedPath)
+        const folder = path.split(/[/\\]/).slice(0, -1).join('\\')
+        if (folder) setDefaultCoverDir(folder)
+        await utilsStore.log(
+            'log',
+            `模板夹封面已更新: uid=${uid}, folder=${folderId}, path=${storedPath}`
+        )
+        utilsStore.showMessage('模板夹封面已更新', 'success')
+    } catch (error) {
+        console.error('模板夹封面选择失败:', error)
+        utilsStore.showMessage(`模板夹封面选择失败: ${error}`, 'error')
+    }
+}
+
+const DEFAULT_COVER_DIR_KEY = 'default-cover-dir'
+const DEFAULT_VIDEO_DIR_KEY = 'default-video-dir'
+const DEFAULT_VIDEO_PICKER_DIR_KEY = 'default-video-picker-dir'
+const DEFAULT_FOLDER_APPLY_DIR_KEY = 'default-template-content-dir'
+const DEFAULT_LOG_EXPORT_DIR_KEY = 'default-log-export-dir'
+
+const getDefaultCoverDir = () => localStorage.getItem(DEFAULT_COVER_DIR_KEY) || ''
+const setDefaultCoverDir = (path: string) =>
+    localStorage.setItem(DEFAULT_COVER_DIR_KEY, path)
+const getDefaultVideoDir = () => localStorage.getItem(DEFAULT_VIDEO_DIR_KEY) || ''
+const getDefaultVideoPickerDir = () =>
+    localStorage.getItem(DEFAULT_VIDEO_PICKER_DIR_KEY) || getDefaultVideoDir()
+const setDefaultVideoPickerDir = (path: string) =>
+    localStorage.setItem(DEFAULT_VIDEO_PICKER_DIR_KEY, path)
+const getDefaultFolderApplyDir = () =>
+    localStorage.getItem(DEFAULT_FOLDER_APPLY_DIR_KEY) || ''
+const setDefaultFolderApplyDir = (path: string) =>
+    localStorage.setItem(DEFAULT_FOLDER_APPLY_DIR_KEY, path)
+const getDefaultLogExportDir = () => localStorage.getItem(DEFAULT_LOG_EXPORT_DIR_KEY) || ''
+const setDefaultLogExportDir = (path: string) =>
+    localStorage.setItem(DEFAULT_LOG_EXPORT_DIR_KEY, path)
+
+const getParentDir = (filePath: string) => filePath.split(/[/\\]/).slice(0, -1).join('\\')
+const joinWinPath = (dir: string, fileName: string) => (dir ? `${dir}\\${fileName}` : fileName)
+
+const sortTemplates = (
+    templates: Array<{ name: string; config: TemplateConfig }>,
+    mode: SortMode
+) => {
+    if (mode === 'az') {
+        return [...templates].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    }
+    return templates
+}
+
+const getDefaultTemplateCover = () =>
+    localStorage.getItem(TEMPLATE_COVER_DEFAULT_KEY) || DEFAULT_TEMPLATE_COVER
+
+const getDefaultFolderCover = () =>
+    localStorage.getItem(FOLDER_COVER_DEFAULT_KEY) || DEFAULT_FOLDER_COVER
+
+const normalizeCoverPath = (coverPath?: string) => {
+    if (!coverPath) return ''
+    if (coverPath.startsWith('file:///')) {
+        return decodeURIComponent(coverPath.replace('file:///', ''))
+    }
+    if (coverPath.startsWith('file://')) {
+        return decodeURIComponent(coverPath.replace('file://', ''))
+    }
+    return coverPath
+}
+
+const guessMimeType = (filePath: string) => {
+    const lower = filePath.toLowerCase()
+    if (lower.endsWith('.png')) return 'image/png'
+    if (lower.endsWith('.webp')) return 'image/webp'
+    if (lower.endsWith('.gif')) return 'image/gif'
+    return 'image/jpeg'
+}
+
+const toDataUrlFromPath = async (filePath: string) => {
+    const bytes = await readFile(filePath)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.slice(i, i + chunkSize)
+        binary += String.fromCharCode(...chunk)
+    }
+    const base64 = btoa(binary)
+    return `data:${guessMimeType(filePath)};base64,${base64}`
+}
+
+const decodeTextFile = async (filePath: string) => {
+    const bytes = await readFile(filePath)
+    try {
+        return new TextDecoder('utf-8').decode(bytes)
+    } catch {
+        let binary = ''
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+        return decodeURIComponent(escape(binary))
+    }
+}
+
+const normalizeTagText = (text: string) => {
+    return text
+        .split(/[\r\n,，;；]+/)
+        .map(v => v.trim())
+        .filter(Boolean)
+        .join(',')
+}
+
+const withHomepageSourceLine = (desc: string | undefined, source: string | undefined) => {
+    const cleanSource = (source || '').trim()
+    if (!cleanSource) return (desc || '').trim()
+    const line = `主页链接：${cleanSource}`
+    const body = (desc || '').trim()
+    if (!body) return line
+    if (body.includes(line)) return body
+    return `${line}\n\n${body}`
+}
+
+const inferTitleFromFileName = (name: string) => {
+    const pure = name.replace(/\.[^.]+$/, '')
+    const m = pure.match(/^\[[0-9\-]+\]\[[^\]]+\](.+)$/)
+    return (m?.[1] || pure || '').trim()
+}
+
+const extractFolderTemplateData = async (folderPath: string) => {
+    const entries = await utilsStore.readDirRecursive(folderPath, false, 2)
+    const files = entries.filter(item => !item.is_directory)
+    const byName = new Map<string, string>()
+    files.forEach(item => byName.set(item.name.toLowerCase(), item.path))
+
+    const findFirst = (candidates: string[]) => {
+        for (const c of candidates) {
+            const hit = byName.get(c.toLowerCase())
+            if (hit) return hit
+        }
+        return ''
+    }
+
+    const textPathTitle = findFirst(['title.txt', '标题.txt'])
+    const textPathDesc = findFirst([
+        'description.txt',
+        'desc.txt',
+        '简介.txt',
+        '简介.description',
+        '.description'
+    ]) || files.find(f => /\.description$/i.test(f.name))?.path || ''
+    const textPathTag = findFirst(['tags.txt', 'tag.txt', '标签.txt'])
+    const looseTagPath =
+        files.find(f => /(?:^|[_\-\s])(tags?|标签)(?:[_\-\s]|\.)/i.test(f.name) && /\.(txt|csv)$/i.test(f.name))
+            ?.path || ''
+    const tagPath = textPathTag || looseTagPath
+    const textPathUrl =
+        files.find(f => /\.url$/i.test(f.name))?.path || findFirst(['source.txt', '来源.txt'])
+    const coverPath =
+        findFirst(['cover.png', 'cover.jpg', 'cover.jpeg', 'thumbnail.png', 'thumbnail.jpg']) ||
+        files.find(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name))?.path ||
+        ''
+
+    const mp4Path = files.find(f => /\.(mp4|mkv|mov|flv|webm)$/i.test(f.name))?.path || ''
+    const mp4Name = files.find(f => f.path === mp4Path)?.name || ''
+
+    const out: {
+        title?: string
+        desc?: string
+        tag?: string
+        source?: string
+        coverPath?: string
+    } = {}
+
+    if (textPathTitle) {
+        out.title = (await decodeTextFile(textPathTitle)).trim()
+    } else if (mp4Name) {
+        out.title = inferTitleFromFileName(mp4Name)
+    }
+
+    if (textPathDesc) {
+        out.desc = (await decodeTextFile(textPathDesc)).trim()
+    }
+    if (tagPath) {
+        out.tag = normalizeTagText(await decodeTextFile(tagPath))
+    } else {
+        const uploaderName = folderPath.split(/[/\\]/).filter(Boolean).pop() || ''
+        if (uploaderName) {
+            out.tag = Array.from(
+                new Set([uploaderName, '虚拟主播', 'vsinger', 'vtuber', '直播', '翻唱'])
+            ).join(',')
+        }
+    }
+    if (textPathUrl) {
+        const raw = (await decodeTextFile(textPathUrl)).trim()
+        const m = raw.match(/URL\s*=\s*(https?:\/\/\S+)/i)
+        out.source = (m?.[1] || raw).trim()
+    }
+    if (coverPath) {
+        out.coverPath = coverPath
+    }
+
+    return out
+}
+
+const applyFolderDataToTemplate = async (
+    uid: number,
+    templateName: string,
+    folderPath: string,
+    options: FolderApplyOptions
+) => {
+    const template = userConfigStore.getUserTemplate(uid, templateName)
+    if (!template) throw new Error('模板不存在')
+
+    let targetSession = editSessions.value.find(
+        session => session.uid === uid && session.templateName === templateName
+    )
+    if (!targetSession) {
+        const targetUser = loginUsers.value.find(user => user.uid === uid)
+        if (!targetUser) throw new Error('目标用户不存在')
+        await openTemplateSession(targetUser, templateName)
+        targetSession = editSessions.value.find(
+            session => session.uid === uid && session.templateName === templateName
+        )
+    }
+    if (!targetSession) throw new Error('未找到可应用的模板标签页')
+
+    const extracted = await extractFolderTemplateData(folderPath)
+    const patch: Partial<TemplateConfig> = {}
+
+    if (options.title && extracted.title) patch.title = extracted.title
+    patch.copyright = 2
+    if (options.tag && extracted.tag) patch.tag = extracted.tag
+    if (options.source && extracted.source) patch.source = extracted.source
+    if (options.desc) {
+        patch.desc = withHomepageSourceLine(extracted.desc, extracted.source)
+    }
+    // 应用模板文件夹时默认切到 音乐-翻唱 分区
+    patch.tid = 31
+    if (options.cover && extracted.coverPath) {
+        try {
+            const coverUrl = await utilsStore.uploadCover(uid, extracted.coverPath)
+            if (coverUrl) patch.cover = coverUrl
+        } catch (e) {
+            utilsStore.showMessage(`封面应用失败: ${e}`, 'warning')
+        }
+    }
+
+    if (Object.keys(patch).length === 0) {
+        utilsStore.showMessage('文件夹中未解析到可应用内容', 'warning')
+        return
+    }
+
+    targetSession.draft = { ...cloneTemplateConfig(targetSession.draft), ...patch }
+    targetSession.updatedAt = Date.now()
+    activeSessionId.value = targetSession.id
+
+    if (selectedUser.value?.uid === uid && currentTemplateName.value === templateName && currentForm.value) {
+        Object.assign(currentForm.value, patch)
+        if (patch.tag !== undefined) {
+            tags.value = (patch.tag || '').split(',').map(v => v.trim()).filter(Boolean)
+        }
+    }
+
+    schedulePersistSessions()
+    utilsStore.showMessage('模板文件夹内容已应用到当前标签页草稿（请手动保存）', 'success')
+}
+
+const bumpCoverVersion = (coverPath?: string) => {
+    const normalized = normalizeCoverPath(coverPath)
+    if (!normalized) return
+    coverVersionMap.value[normalized] = Date.now()
+}
+
+const resolveCoverSrc = (coverPath: string | undefined, fallbackType: 'template' | 'folder') => {
+    const normalized = normalizeCoverPath(coverPath)
+    if (!normalized) {
+        return fallbackType === 'template' ? getDefaultTemplateCover() : getDefaultFolderCover()
+    }
+    if (
+        normalized.startsWith('http://') ||
+        normalized.startsWith('https://') ||
+        normalized.startsWith('data:')
+    ) {
+        return normalized
+    }
+    const normalizedForTauri = normalized.replace(/\\/g, '/')
+    const src = convertFileSrc(normalizedForTauri)
+    const version = coverVersionMap.value[normalized]
+    return version ? `${src}?v=${version}` : src
+}
+
+const getTemplateCoverPath = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    return organizer.templateCovers?.[templateName] || ''
+}
+
+const setTemplateCoverPath = (uid: number, templateName: string, coverPath: string) => {
+    const organizer = getUserOrganizer(uid)
+    organizer.templateCovers = organizer.templateCovers || {}
+    organizer.templateCovers[templateName] = coverPath
+    bumpCoverVersion(coverPath)
+    saveTemplateOrganizer()
+}
+
+const clearTemplateCoverPath = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    if (organizer.templateCovers && organizer.templateCovers[templateName]) {
+        const oldPath = organizer.templateCovers[templateName]
+        delete organizer.templateCovers[templateName]
+        bumpCoverVersion(oldPath)
+        saveTemplateOrganizer()
+    }
+}
+
+const getFolderCoverPath = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    return folder?.coverPath || ''
+}
+
+const setFolderCoverPath = (uid: number, folderId: string, coverPath: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+    folder.coverPath = coverPath
+    bumpCoverVersion(coverPath)
+    saveTemplateOrganizer()
+}
+
+const clearFolderCoverPath = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+    const oldPath = folder.coverPath
+    folder.coverPath = ''
+    bumpCoverVersion(oldPath)
+    saveTemplateOrganizer()
+}
+
+const handleCoverError = async (
+    event: Event,
+    coverPath: string | undefined,
+    fallbackType: 'template' | 'folder'
+) => {
+    const target = event.target as HTMLImageElement
+    const normalized = normalizeCoverPath(coverPath)
+    if (normalized) {
+        try {
+            const dataUrl = await toDataUrlFromPath(normalized)
+            target.src = dataUrl
+            return
+        } catch (error) {
+            await utilsStore.log(
+                'error',
+                `封面读取失败，回退默认封面: path=${normalized}, error=${JSON.stringify(error)}`
+            )
+        }
+    }
+    target.src = fallbackType === 'template' ? getDefaultTemplateCover() : getDefaultFolderCover()
+}
+
+const toggleFolderCollapsed = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+    folder.collapsed = !folder.collapsed
+    saveTemplateOrganizer()
+}
+
+const isFolderCollapsed = (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    return folder?.collapsed ?? true
+}
+
+const getTemplateRenderItems = (
+    uid: number,
+    templates: Array<{ name: string; config: TemplateConfig }>
+): TemplateRenderItem[] => {
+    const organizer = getUserOrganizer(uid)
+    const byName = new Map(templates.map(template => [template.name, template]))
+    const mode = organizer.sortMode
+    const items: TemplateRenderItem[] = []
+
+    organizer.folders.forEach(folder => {
+        const folderTemplates = folder.order
+            .map(name => byName.get(name))
+            .filter((template): template is { name: string; config: TemplateConfig } => !!template)
+        const finalFolderTemplates = sortTemplates(folderTemplates, mode)
+        if (finalFolderTemplates.length === 0) return
+
+        items.push({
+            kind: 'folder',
+            id: `folder-${folder.id}`,
+            folderId: folder.id,
+            name: folder.name,
+            count: finalFolderTemplates.length
+        })
+
+        if (!folder.collapsed) {
+            finalFolderTemplates.forEach(template => {
+                items.push({
+                    kind: 'template',
+                    id: `template-${folder.id}-${template.name}`,
+                    folderId: folder.id,
+                    template
+                })
+            })
+        }
+    })
+
+    const ungroupedTemplates = organizer.ungroupedOrder
+        .map(name => byName.get(name))
+        .filter((template): template is { name: string; config: TemplateConfig } => !!template)
+    const finalUngroupedTemplates = sortTemplates(ungroupedTemplates, mode)
+
+    finalUngroupedTemplates.forEach(template => {
+        items.push({
+            kind: 'template',
+            id: `template-root-${template.name}`,
+            template
+        })
+    })
+
+    return items
+}
+
+const createTemplateFolder = async (uid: number): Promise<string | null> => {
+    try {
+        const { value } = await ElMessageBox.prompt('请输入模板夹名称', '新建模板夹', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            inputPlaceholder: '例如：翻唱、游戏实况、投稿备份'
+        })
+        const folderName = value.trim()
+        if (!folderName) {
+            utilsStore.showMessage('模板夹名称不能为空', 'error')
+            return null
+        }
+        const organizer = getUserOrganizer(uid)
+        if (organizer.folders.some(folder => folder.name === folderName)) {
+            utilsStore.showMessage('模板夹名称已存在', 'error')
+            return null
+        }
+        const folderId = uuidv4()
+        organizer.folders.push({
+            id: folderId,
+            name: folderName,
+            order: [],
+            collapsed: true,
+            coverPath: ''
+        })
+        saveTemplateOrganizer()
+        utilsStore.showMessage('模板夹创建成功', 'success')
+        return folderId
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('新建模板夹失败:', error)
+            utilsStore.showMessage(`新建模板夹失败: ${error}`, 'error')
+        }
+    }
+    return null
+}
+
+const renameTemplateFolder = async (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+
+    try {
+        const { value } = await ElMessageBox.prompt('请输入新的模板夹名称', '重命名模板夹', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            inputPlaceholder: '请输入模板夹名称',
+            inputValue: folder.name
+        })
+        const newName = value.trim()
+        if (!newName) {
+            utilsStore.showMessage('模板夹名称不能为空', 'error')
+            return
+        }
+        if (organizer.folders.some(item => item.name === newName && item.id !== folderId)) {
+            utilsStore.showMessage('模板夹名称已存在', 'error')
+            return
+        }
+        folder.name = newName
+        saveTemplateOrganizer()
+        utilsStore.showMessage('模板夹重命名成功', 'success')
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('重命名模板夹失败:', error)
+            utilsStore.showMessage(`重命名模板夹失败: ${error}`, 'error')
+        }
+    }
+}
+
+const deleteTemplateFolder = async (uid: number, folderId: string) => {
+    const organizer = getUserOrganizer(uid)
+    const folder = organizer.folders.find(item => item.id === folderId)
+    if (!folder) return
+
+    try {
+        await ElMessageBox.confirm(
+            `删除模板夹 "${folder.name}" 后，模板会移回未分组列表，是否继续？`,
+            '删除模板夹',
+            {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+            }
+        )
+
+        organizer.ungroupedOrder.push(...folder.order.filter(name => !organizer.ungroupedOrder.includes(name)))
+        organizer.folders = organizer.folders.filter(item => item.id !== folderId)
+        saveTemplateOrganizer()
+        utilsStore.showMessage('模板夹已删除', 'success')
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('删除模板夹失败:', error)
+            utilsStore.showMessage(`删除模板夹失败: ${error}`, 'error')
+        }
+    }
+}
+
+const openMoveDialog = (uid: number, templateName: string, folderId?: string) => {
+    moveDialogUserUid.value = uid
+    moveDialogTemplateName.value = templateName
+    moveDialogTemplateFolderId.value = folderId || null
+    moveDialogTargetFolderId.value = folderId || ''
+    moveDialogVisible.value = true
+}
+
+const confirmMoveDialog = async () => {
+    if (!moveDialogUserUid.value || !moveDialogTemplateName.value) {
+        moveDialogVisible.value = false
+        return
+    }
+
+    const uid = moveDialogUserUid.value
+    const templateName = moveDialogTemplateName.value
+    const organizer = getUserOrganizer(uid)
+
+    removeTemplateFromOrganizer(uid, templateName)
+
+    if (!moveDialogTargetFolderId.value) {
+        organizer.ungroupedOrder.push(templateName)
+    } else {
+        const targetFolder = organizer.folders.find(
+            folder => folder.id === moveDialogTargetFolderId.value
+        )
+        if (targetFolder) {
+            targetFolder.order.push(templateName)
+        } else {
+            organizer.ungroupedOrder.push(templateName)
+        }
+    }
+    saveTemplateOrganizer()
+    utilsStore.showMessage('模板移动成功', 'success')
+    moveDialogVisible.value = false
+}
+
+const createFolderFromMoveDialog = async () => {
+    if (!moveDialogUserUid.value) return
+    const newFolderId = await createTemplateFolder(moveDialogUserUid.value)
+    if (newFolderId) {
+        moveDialogTargetFolderId.value = newFolderId
+    }
+}
+
+const moveTemplateToRoot = (uid: number, templateName: string) => {
+    const organizer = getUserOrganizer(uid)
+    removeTemplateFromOrganizer(uid, templateName)
+    organizer.ungroupedOrder.push(templateName)
+    saveTemplateOrganizer()
+    utilsStore.showMessage('模板已移出模板夹', 'success')
+}
+
+const moveTemplatePosition = (uid: number, templateName: string, direction: 'up' | 'down') => {
+    const organizer = getUserOrganizer(uid)
+    organizer.sortMode = 'manual'
+
+    const folder = organizer.folders.find(item => item.order.includes(templateName))
+    const order = folder ? folder.order : organizer.ungroupedOrder
+    const index = order.indexOf(templateName)
+    if (index < 0) return
+    const target = direction === 'up' ? index - 1 : index + 1
+    if (target < 0 || target >= order.length) return
+
+    ;[order[index], order[target]] = [order[target], order[index]]
+    saveTemplateOrganizer()
+}
+
+const openFolderApplyDialogForCurrent = () => {
+    if (!selectedUser.value?.uid || !currentTemplateName.value) {
+        utilsStore.showMessage('请先选择模板', 'warning')
+        return
+    }
+    folderApplyUid.value = selectedUser.value.uid
+    folderApplyTemplateName.value = currentTemplateName.value
+    folderApplyPath.value = getDefaultFolderApplyDir()
+    folderApplyFields.value = ['cover', 'desc', 'tag', 'source']
+    showFolderApplyDialog.value = true
+}
+
+const selectFolderApplyPath = async () => {
+    try {
+        const selected = await open({
+            directory: true,
+            multiple: false,
+            defaultPath: getDefaultFolderApplyDir() || undefined
+        })
+        if (!selected) return
+        const picked = String(selected)
+        folderApplyPath.value = picked
+        setDefaultFolderApplyDir(picked)
+    } catch (error) {
+        utilsStore.showMessage(`选择文件夹失败: ${error}`, 'error')
+    }
+}
+
+const confirmFolderApplyDialog = async () => {
+    if (!folderApplyUid.value || !folderApplyTemplateName.value) {
+        utilsStore.showMessage('目标模板无效', 'error')
+        return
+    }
+    if (!folderApplyPath.value) {
+        utilsStore.showMessage('请先选择文件夹', 'warning')
+        return
+    }
+    const picked = new Set(folderApplyFields.value || [])
+    const options: FolderApplyOptions = {
+        title: picked.has('title'),
+        cover: picked.has('cover'),
+        desc: picked.has('desc'),
+        tag: picked.has('tag'),
+        source: picked.has('source')
+    }
+    await applyFolderDataToTemplate(
+        folderApplyUid.value,
+        folderApplyTemplateName.value,
+        folderApplyPath.value,
+        options
+    )
+    showFolderApplyDialog.value = false
+}
+
+const handleApplyFolderToTemplateFromDialog = async (
+    userUid: number,
+    templateName: string,
+    folderPath: string,
+    options: FolderApplyOptions
+) => {
+    try {
+        await applyFolderDataToTemplate(userUid, templateName, folderPath, options)
+    } catch (error) {
+        utilsStore.showMessage(`应用文件夹内容失败: ${error}`, 'error')
+    }
+}
+
+const isTemplateDragEnabled = (uid: number, expired: boolean) => {
+    if (expired || templateLoading.value) return false
+    return getTemplateSortMode(uid) === 'manual'
+}
+
+const getTemplateOrderRef = (organizer: UserTemplateOrganizer, folderId?: string) => {
+    if (!folderId) return organizer.ungroupedOrder
+    const folder = organizer.folders.find(item => item.id === folderId)
+    return folder ? folder.order : organizer.ungroupedOrder
+}
+
+const onTemplateDragStart = (
+    event: DragEvent,
+    uid: number,
+    templateName: string,
+    folderId?: string
+) => {
+    if (!isTemplateDragEnabled(uid, false)) return
+    draggingTemplate.value = { uid, templateName, folderId }
+    event.dataTransfer?.setData('text/plain', templateName)
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move'
+    }
+}
+
+const onTemplateDragOver = (
+    event: DragEvent,
+    uid: number,
+    _templateName: string,
+    _folderId?: string
+) => {
+    if (!draggingTemplate.value) return
+    if (draggingTemplate.value.uid !== uid) return
+    if (!isTemplateDragEnabled(uid, false)) return
+    if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'move'
+    }
+}
+
+const onTemplateDrop = (
+    _event: DragEvent,
+    uid: number,
+    targetTemplateName: string,
+    targetFolderId?: string
+) => {
+    const dragging = draggingTemplate.value
+    draggingTemplate.value = null
+    if (!dragging) return
+    if (dragging.uid !== uid) return
+    if (dragging.templateName === targetTemplateName && dragging.folderId === targetFolderId) return
+    if (!isTemplateDragEnabled(uid, false)) return
+
+    const organizer = getUserOrganizer(uid)
+    const sourceOrder = getTemplateOrderRef(organizer, dragging.folderId)
+    const targetOrder = getTemplateOrderRef(organizer, targetFolderId)
+
+    const sourceIndex = sourceOrder.indexOf(dragging.templateName)
+    if (sourceIndex < 0) return
+    sourceOrder.splice(sourceIndex, 1)
+
+    const targetIndex = targetOrder.indexOf(targetTemplateName)
+    if (targetIndex < 0) {
+        targetOrder.push(dragging.templateName)
+    } else {
+        targetOrder.splice(targetIndex, 0, dragging.templateName)
+    }
+    saveTemplateOrganizer()
+}
+
+const onTemplateDragEnd = () => {
+    draggingTemplate.value = null
+}
+
+const isSessionAutoSubmitting = (sessionId: string) => {
+    return !!autoSubmittingRecord.value[sessionId]
+}
+
+const isTemplateAutoSubmitting = (uid: number, templateName: string) => {
+    return editSessions.value.some(
+        session =>
+            session.uid === uid &&
+            session.templateName === templateName &&
+            !!autoSubmittingRecord.value[session.id]
+    )
+}
 
 // 获取当前模板的自动提交状态
 const getCurrentAutoSubmitting = computed(() => {
-    if (!selectedUser.value || !currentTemplateName.value) return false
-    const key = getTemplateKey(selectedUser.value.uid, currentTemplateName.value)
-    return autoSubmittingRecord.value[key] || false
+    if (!activeSessionId.value) return false
+    return !!autoSubmittingRecord.value[activeSessionId.value]
 })
 
 // 设置模板的自动提交状态
-const setAutoSubmitting = (uid: number, templateName: string, status: boolean) => {
-    const key = getTemplateKey(uid, templateName)
+const setAutoSubmitting = (sessionId: string, status: boolean) => {
+    const key = sessionId
     if (status) {
         autoSubmittingRecord.value[key] = true
     } else {
         delete autoSubmittingRecord.value[key]
+        delete autoSubmitReadySince.value[key]
+        delete autoSubmitInProgress.value[key]
+        delete autoSubmitRetryCount.value[key]
     }
 }
 
@@ -1124,42 +2582,111 @@ const hasAnyAutoSubmitting = computed(() => {
     return Object.keys(autoSubmittingRecord.value).length > 0
 })
 
+const AUTO_SUBMIT_STABLE_MS = 8000
+const AUTO_SUBMIT_MAX_RETRY = 6
+
+const hasSessionInFlightUploads = (session: any) => {
+    const videoIds = new Set((session?.draft?.videos || []).map((video: any) => video.id))
+    return uploadStore.uploadQueue.some((task: any) => {
+        if (task?.user?.uid !== session?.uid) return false
+        if (!videoIds.has(task?.video?.id)) return false
+        return ['Waiting', 'Pending', 'Running'].includes(task.status)
+    })
+}
+
+const isVideoUploadCompleted = (video: any) => {
+    if (!video) return false
+    if (video.complete === true) return true
+    if (video.status === 'Completed') return true
+    const task = uploadStore.getUploadTask(video.id)
+    return task?.status === 'Completed'
+}
+
 // 全局自动提交检查函数
 const checkAutoSubmitAll = async () => {
-    const templateKeys = Object.keys(autoSubmittingRecord.value)
+    const sessionIds = Object.keys(autoSubmittingRecord.value)
 
-    for (const templateKey of templateKeys) {
-        const [uidStr, templateName] = templateKey.split('-', 2)
-        const uid = parseInt(uidStr)
-
-        if (isNaN(uid) || !templateName) continue
-
-        // 获取用户和模板配置
-        const user = loginUsers.value.find(u => u.uid === uid)
-        if (!user || !userConfigStore.configRoot?.config[uid]?.templates[templateName]) {
-            // 如果用户或模板不存在，清除自动提交状态
-            setAutoSubmitting(uid, templateName, false)
+    for (const sessionId of sessionIds) {
+        const session = editSessions.value.find(item => item.id === sessionId)
+        if (!session) {
+            setAutoSubmitting(sessionId, false)
             continue
         }
 
-        const template = userConfigStore.configRoot.config[uid].templates[templateName]
+        const user = loginUsers.value.find(u => u.uid === session.uid)
+        if (!user) {
+            setAutoSubmitting(sessionId, false)
+            continue
+        }
+
+        const template = session.draft
 
         // 检查是否所有文件都已上传完成
         if (template.videos && template.videos.length > 0) {
-            const allUploaded = template.videos.every(video => video.complete && video.path === '')
+            const allUploaded = template.videos.every(video => isVideoUploadCompleted(video))
 
-            if (allUploaded && autoSubmittingRecord.value[templateKey]) {
-                // 文件已全部上传完成，执行提交
-                setAutoSubmitting(uid, templateName, false)
-                try {
-                    await performTemplateSubmit(uid, templateName, template)
-                } catch (error) {
-                    console.error(`模板 ${templateKey} 自动提交失败:`, error)
+            if (allUploaded && autoSubmittingRecord.value[sessionId]) {
+                if (autoSubmitInProgress.value[sessionId]) {
+                    continue
                 }
+
+                if (hasSessionInFlightUploads(session)) {
+                    delete autoSubmitReadySince.value[sessionId]
+                    continue
+                }
+
+                const readySince = autoSubmitReadySince.value[sessionId] || 0
+                const now = Date.now()
+                if (!readySince) {
+                    autoSubmitReadySince.value[sessionId] = now
+                    continue
+                }
+                if (now - readySince < AUTO_SUBMIT_STABLE_MS) {
+                    continue
+                }
+
+                autoSubmitInProgress.value[sessionId] = true
+                try {
+                    console.log(`自动提交触发: ${session.tabTitle}`)
+                    await performTemplateSubmit(session.uid, session.templateName, template, session.id)
+                    setAutoSubmitting(sessionId, false)
+                    delete autoSubmitReadySince.value[sessionId]
+                    autoSubmitRetryCount.value[sessionId] = 0
+                } catch (error) {
+                    console.error(`标签页 ${session.tabTitle} 自动提交失败:`, error)
+                    const message = String(error || '')
+                    if (message.includes('code: 21015') || message.includes('code\":21015')) {
+                        const retry = (autoSubmitRetryCount.value[sessionId] || 0) + 1
+                        autoSubmitRetryCount.value[sessionId] = retry
+                        if (retry <= AUTO_SUBMIT_MAX_RETRY) {
+                            autoSubmitReadySince.value[sessionId] = Date.now()
+                            utilsStore.showMessage(
+                                `自动提交等待重试(${retry}/${AUTO_SUBMIT_MAX_RETRY}): ${session.tabTitle}`,
+                                'warning'
+                            )
+                        } else {
+                            setAutoSubmitting(sessionId, false)
+                            delete autoSubmitReadySince.value[sessionId]
+                            utilsStore.showMessage(
+                                `自动提交重试已达上限，请手动提交: ${session.tabTitle}`,
+                                'error'
+                            )
+                        }
+                    } else {
+                        autoSubmitReadySince.value[sessionId] = Date.now()
+                    }
+                } finally {
+                    delete autoSubmitInProgress.value[sessionId]
+                }
+            } else {
+                delete autoSubmitReadySince.value[sessionId]
             }
         } else {
             // 没有视频文件，清除自动提交状态
-            setAutoSubmitting(uid, templateName, false)
+            setAutoSubmitting(sessionId, false)
+            delete autoSubmitReadySince.value[sessionId]
+            delete autoSubmitInProgress.value[sessionId]
+            delete autoSubmitRetryCount.value[sessionId]
         }
     }
 
@@ -1178,7 +2705,12 @@ const startAutoSubmitCheck = () => {
 }
 
 // 执行模板提交
-const performTemplateSubmit = async (uid: number, templateName: string, template: any) => {
+const performTemplateSubmit = async (
+    uid: number,
+    templateName: string,
+    template: any,
+    sessionId?: string
+) => {
     const user = loginUsers.value.find(u => u.uid === uid)
     if (!user) throw new Error('用户不存在')
 
@@ -1193,6 +2725,21 @@ const performTemplateSubmit = async (uid: number, templateName: string, template
 
         utilsStore.showMessage(`视频${resp.bvid}提交成功 (模板: ${templateName})`, 'success')
         console.log(`视频${resp.bvid}提交成功 (模板: ${templateName})`, 'success')
+
+        const targetSession =
+            (sessionId && editSessions.value.find(s => s.id === sessionId)) ||
+            editSessions.value.find(
+                s =>
+                    s.id === activeSessionId.value &&
+                    s.uid === uid &&
+                    s.templateName === templateName
+            ) ||
+            editSessions.value.find(s => s.uid === uid && s.templateName === templateName)
+        if (targetSession) {
+            targetSession.submittedOnce = true
+            targetSession.updatedAt = Date.now()
+            schedulePersistSessions()
+        }
 
         if (resp && resp.aid && utilsStore.hasSeason) {
             try {
@@ -1290,39 +2837,54 @@ const selectedSubCategory = ref<any>(null)
 const categoryPopoverVisible = ref(false)
 let generalUpdateTimer: number | null = null
 
-const currentTemplate = computed(() => {
-    if (!selectedUser.value || !currentTemplateName.value || !userConfigStore.configRoot?.config) {
-        return null
-    }
-    const userConfig = userConfigStore.configRoot.config[selectedUser.value.uid]
-    if (!userConfig || !userConfig.templates[currentTemplateName.value]) {
-        return null
-    }
-    return userConfig.templates[currentTemplateName.value]
-})
+const currentSession = computed(
+    () => editSessions.value.find(session => session.id === activeSessionId.value) || null
+)
+
+const currentTemplate = computed(() => currentSession.value?.draft || null)
 
 // 当前表单数据 - 直接操作模板配置
 const currentForm = computed({
     get() {
-        return currentTemplate.value
+        return currentSession.value?.draft || null
     },
     set(value) {
-        if (
-            !selectedUser.value ||
-            !currentTemplateName.value ||
-            !userConfigStore.configRoot?.config ||
-            !value
-        ) {
-            return
-        }
-        const userConfig = userConfigStore.configRoot.config[selectedUser.value.uid]
-        if (userConfig && userConfig.templates[currentTemplateName.value]) {
-            userConfig.templates[currentTemplateName.value] = value
-        }
+        if (!currentSession.value || !value) return
+        currentSession.value.draft = value
+        touchActiveSession()
+        schedulePersistSessions()
     }
 })
 
 const tags = ref<string[]>([])
+
+const SCHEDULE_MIN_LEAD_MS = (2 * 60 + 10) * 60 * 1000
+const SCHEDULE_DEFAULT_LEAD_MS = 3 * 60 * 60 * 1000
+const SCHEDULE_MAX_DAYS = 15
+
+const getScheduleMinDate = () => new Date(Date.now() + SCHEDULE_MIN_LEAD_MS)
+const getScheduleMaxDate = () => new Date(Date.now() + SCHEDULE_MAX_DAYS * 24 * 60 * 60 * 1000)
+const getScheduleDefaultDate = () => new Date(Date.now() + SCHEDULE_DEFAULT_LEAD_MS)
+const scheduleDefaultDate = computed(() => getScheduleDefaultDate())
+const schedulePickerMinDay = computed(() => {
+    const d = getScheduleMinDate()
+    d.setHours(0, 0, 0, 0)
+    return d
+})
+const schedulePickerMaxDay = computed(() => {
+    const d = getScheduleMaxDate()
+    d.setHours(23, 59, 59, 999)
+    return d
+})
+
+const clampScheduleDate = (raw: Date | null) => {
+    if (!raw) return null
+    const min = getScheduleMinDate()
+    const max = getScheduleMaxDate()
+    if (raw < min) return min
+    if (raw > max) return max
+    return raw
+}
 
 // 日期选择器的计算属性 - 处理时间戳转换
 const dtimeDate = computed({
@@ -1331,7 +2893,23 @@ const dtimeDate = computed({
     },
     set(value: Date | null) {
         if (currentForm.value) {
-            currentForm.value.dtime = value ? Math.floor(value.getTime() / 1000) : undefined
+            const min = getScheduleMinDate()
+            const max = getScheduleMaxDate()
+            const clamped = clampScheduleDate(value)
+            currentForm.value.dtime = clamped ? Math.floor(clamped.getTime() / 1000) : undefined
+            if (value && clamped && Math.abs(clamped.getTime() - value.getTime()) > 1000) {
+                if (value < min) {
+                    utilsStore.showMessage(
+                        `定时发布需在当前时间至少2小时10分钟后，已自动调整到 ${min.toLocaleString()}`,
+                        'warning'
+                    )
+                } else if (value > max) {
+                    utilsStore.showMessage(
+                        `定时发布时间不能超过15天，已自动调整到 ${max.toLocaleString()}`,
+                        'warning'
+                    )
+                }
+            }
         }
     }
 })
@@ -1350,6 +2928,16 @@ const videos = computed({
 
 // 检查指定模板是否有未保存的改动
 const checkTemplateHasUnsavedChanges = (uid: number, templateName: string): boolean => {
+    const openedSession = editSessions.value.find(
+        session => session.uid === uid && session.templateName === templateName
+    )
+    if (openedSession) {
+        const savedTemplate = userConfigStore.getUserTemplate(uid, templateName)
+        if (savedTemplate) {
+            return hasUnsavedChanges(savedTemplate, openedSession.draft)
+        }
+    }
+
     if (!userConfigStore.configRoot?.config || !userConfigStore.configBase?.config) {
         return false
     }
@@ -1538,6 +3126,9 @@ const forwardConsole = (fnName: keyof Console, logger: (level: string, ...args: 
 }
 
 onMounted(async () => {
+    loadTemplateOrganizer()
+    reloadLocalUiSettings()
+    loadSidebarWidth()
     await initializeData()
     await setupDragAndDrop()
     keyboardCleanup = await setupKeyboardShortcuts()
@@ -1550,6 +3141,12 @@ onMounted(async () => {
     document.addEventListener('contextmenu', (event: MouseEvent) => {
         event.preventDefault()
     })
+
+    const onResize = () => {
+        sidebarWidth.value = clampSidebarWidth(sidebarWidth.value)
+    }
+    window.addEventListener('resize', onResize)
+    sidebarResizeCleanup = () => window.removeEventListener('resize', onResize)
 })
 
 // 在组件卸载时清理
@@ -1569,6 +3166,16 @@ onUnmounted(() => {
         generalUpdateTimer = null
     }
 
+    if (sessionPersistTimer) {
+        clearTimeout(sessionPersistTimer)
+        sessionPersistTimer = null
+    }
+
+    if (sidebarResizeCleanup) {
+        sidebarResizeCleanup()
+        sidebarResizeCleanup = null
+    }
+
     // 清理所有自动提交状态
     autoSubmittingRecord.value = {}
 })
@@ -1585,6 +3192,7 @@ const initializeData = async () => {
             await utilsStore.initTypeList(loginUsers.value[0].uid)
             await utilsStore.initTopicList(loginUsers.value[0].uid)
             await userConfigStore.buildUserTemplates(loginUsers.value)
+            syncTemplateOrganizer()
             await uploadStore.getUploadQueue()
             if (!generalUpdateTimer) {
                 generalUpdateTimer = setInterval(() => {
@@ -1592,19 +3200,37 @@ const initializeData = async () => {
                         uploadStore.getUploadQueue()
                     }
                     for (const task of uploadStore.uploadQueue) {
-                        if (task.status === 'Completed') {
-                            const templateName = task.template
-                            const uid = task.user.uid
-                            const videos =
-                                userConfigStore.configRoot?.config[uid]?.templates[templateName]
-                                    ?.videos || []
+                        const templateName = task.template
+                        const uid = task.user.uid
 
-                            const video = videos.find(v => v.id === task.video?.id)
-                            if (video && video.filename !== task.video?.filename) {
-                                video.filename = task.video.filename
-                                video.path = task.video.path
+                        const applyTaskToVideo = (video: any) => {
+                            if (!video) return
+                            video.status = task.status || video.status
+                            video.errorMessage = task.error_message || ''
+                            video.totalSize = task.total_size || video.totalSize || 0
+                            video.speed = task.speed || 0
+                            video.progress = task.progress || video.progress || 0
+                            if (task.video?.filename) video.filename = task.video.filename
+                            if (typeof task.video?.cid === 'number') video.cid = task.video.cid
+                            if (task.finished_at) video.finished_at = task.finished_at
+                            if (task.status === 'Completed') {
                                 video.complete = true
-                                video.finished_at = task.finished_at
+                            }
+                        }
+
+                        const configVideos =
+                            userConfigStore.configRoot?.config[uid]?.templates[templateName]
+                                ?.videos || []
+                        const configVideo = configVideos.find(v => v.id === task.video?.id)
+                        if (configVideo) {
+                            applyTaskToVideo(configVideo)
+                        }
+
+                        for (const session of editSessions.value) {
+                            if (session.uid !== uid || session.templateName !== templateName) continue
+                            const sessionVideo = session.draft?.videos?.find(v => v.id === task.video?.id)
+                            if (sessionVideo) {
+                                applyTaskToVideo(sessionVideo)
                             }
                         }
                     }
@@ -1613,7 +3239,10 @@ const initializeData = async () => {
         }
 
         setTimeout(async () => {
-            await restoreTemplateSelection()
+            const restoredSessions = await restoreTemplateSessions()
+            if (!restoredSessions) {
+                await restoreTemplateSelection()
+            }
             restoreCardCollapsedState()
         }, 100)
     } catch (error) {
@@ -1621,6 +3250,33 @@ const initializeData = async () => {
         utilsStore.showMessage(`'初始化数据失败: ${error}'`, 'error')
     }
 }
+
+watch(
+    () =>
+        userTemplates.value.map(userTemplate => ({
+            uid: userTemplate.user.uid,
+            templates: userTemplate.templates.map(template => template.name).sort()
+        })),
+    () => {
+        syncTemplateOrganizer()
+    },
+    { deep: true }
+)
+
+watch(
+    () => editSessions.value,
+    () => {
+        schedulePersistSessions()
+    },
+    { deep: true }
+)
+
+watch(
+    () => activeSessionId.value,
+    () => {
+        schedulePersistSessions()
+    }
+)
 
 const hasUnsavedChanges = (
     baseTemplateData: TemplateConfig,
@@ -1761,6 +3417,15 @@ const setupKeyboardShortcuts = async () => {
             if (selectedUser.value && currentTemplateName.value) {
                 saveTemplate()
             }
+            return
+        }
+
+        // Ctrl+W 关闭当前标签页
+        if (event.ctrlKey && event.key.toLowerCase() === 'w') {
+            event.preventDefault()
+            if (activeSessionId.value) {
+                closeSessionTab(activeSessionId.value)
+            }
         }
     }
 
@@ -1822,6 +3487,45 @@ const restoreCardCollapsedState = () => {
         }
     } catch (error) {
         console.error('恢复卡片折叠状态失败:', error)
+    }
+}
+
+const restoreTemplateSessions = async () => {
+    try {
+        const raw = localStorage.getItem(TEMPLATE_SESSIONS_KEY)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as {
+            activeSessionId?: string
+            sessions?: TemplateEditSession[]
+        }
+        if (!parsed?.sessions?.length) return false
+
+        const restored: TemplateEditSession[] = []
+        for (const session of parsed.sessions) {
+            const user = loginUsers.value.find(item => item.uid === session.uid)
+            if (!user || user.expired) continue
+            const template = userConfigStore.getUserTemplate(session.uid, session.templateName)
+            if (!template) continue
+            restored.push({
+                ...session,
+                username: user.username || session.username,
+                draft: cloneTemplateConfig(session.draft || template),
+                updatedAt: Date.now(),
+                submittedOnce: !!session.submittedOnce
+            })
+        }
+        if (!restored.length) return false
+
+        editSessions.value = restored.slice(0, getTemplateTabMax())
+        const activeId = parsed.activeSessionId || editSessions.value[0].id
+        const existsActive = editSessions.value.some(item => item.id === activeId)
+        await setActiveSession(existsActive ? activeId : editSessions.value[0].id)
+        schedulePersistSessions()
+        utilsStore.showMessage('已恢复上次编辑标签页', 'success')
+        return true
+    } catch (error) {
+        console.error('恢复编辑会话失败:', error)
+        return false
     }
 }
 
@@ -1990,10 +3694,11 @@ const ensureTitleFromFirstVideo = (videoTitle: string) => {
     }
 }
 
-const addVideoToCurrentForm = async (videoPath: string) => {
+const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) => {
     // 从路径中提取文件名
     const videoBaseName = videoPath.split(/[/\\]/).pop() || videoPath
     const videoNameWOExtension = videoBaseName.replace(/\.[^/.]+$/, '').slice(0, 80)
+    const finalTitle = (customTitle || videoNameWOExtension).slice(0, 80)
     const videoExt = videoBaseName.split('.').pop()?.toLowerCase() || ''
 
     const extFilter = [
@@ -2022,7 +3727,7 @@ const addVideoToCurrentForm = async (videoPath: string) => {
     }
 
     const existingFile = currentForm.value.videos.find(
-        f => f.path === videoPath || videoNameWOExtension === f.title
+        f => f.path === videoPath || finalTitle === f.title
     )
     if (existingFile) {
         return 0 // 跳过已存在的文件
@@ -2040,19 +3745,28 @@ const addVideoToCurrentForm = async (videoPath: string) => {
         return 0
     }
 
+    let fileMtime = 0
+    try {
+        const fileInfo = await stat(videoPath)
+        fileMtime = fileInfo.mtime ? fileInfo.mtime.getTime() : 0
+    } catch (error) {
+        console.warn('读取视频文件修改时间失败:', error)
+    }
+
     // 添加到currentForm.videos
     const videoId = uuidv4()
     currentForm.value.videos.push({
         id: videoId,
         filename: videoBaseName, // 使用完整的文件路径
-        title: videoNameWOExtension, // 去除扩展名作为标题
+        title: finalTitle, // 去除扩展名作为标题或使用自定义标题
         desc: '',
         path: videoPath, // 保存完整路径
-        complete: false
+        complete: false,
+        mtime: fileMtime
     })
 
     // 标题为空时，自动使用本次导入的第一个视频文件名（去扩展名）作为标题
-    ensureTitleFromFirstVideo(videoNameWOExtension)
+    ensureTitleFromFirstVideo(finalTitle)
 
     // 检查是否启用自动添加到上传队列
     if (userConfigStore.configRoot?.auto_upload && selectedUser.value) {
@@ -2155,7 +3869,18 @@ const handleUserExpansion = (userUid: number) => {
 }
 
 // 处理模板选择点击 - 在模板加载时禁用
-const handleTemplateSelection = (user: any, templateName: string) => {
+const handleTemplateSelection = (user: any, templateName: string, event?: MouseEvent) => {
+    if (event) {
+        const target = event.target as HTMLElement | null
+        if (
+            target?.closest('.template-menu-btn') ||
+            target?.closest('.el-dropdown') ||
+            target?.closest('.el-dropdown-menu')
+        ) {
+            return
+        }
+    }
+
     if (user?.expired) {
         showLoginDialog.value = true
         utilsStore.showMessage('该用户 Cookie 已过期，请重新登录', 'warning')
@@ -2181,75 +3906,152 @@ const handleCoverSelection = () => {
     }
 }
 
-// 选择模板
-const selectTemplate = async (user: any, templateName: string) => {
-    // 如果正在加载模板，禁止切换
-    if (templateLoading.value) {
+const getSessionTitle = (uid: number, templateName: string) => {
+    const count = editSessions.value.filter(
+        session => session.uid === uid && session.templateName === templateName
+    ).length
+    return `${templateName} #${count + 1}`
+}
+
+const setActiveSession = async (sessionId: string) => {
+    const session = editSessions.value.find(item => item.id === sessionId)
+    if (!session) return
+    activeSessionId.value = session.id
+    selectedUser.value =
+        loginUsers.value.find(user => user.uid === session.uid) || {
+            uid: session.uid,
+            username: session.username
+        }
+    currentTemplateName.value = session.templateName
+    touchActiveSession()
+    await loadTemplate()
+    saveTemplateSelection(session.uid, session.templateName)
+    schedulePersistSessions()
+}
+
+const openTemplateSession = async (user: any, templateName: string) => {
+    if (editSessions.value.length >= getTemplateTabMax()) {
+        utilsStore.showMessage(`最多可打开 ${getTemplateTabMax()} 个编辑标签页`, 'warning')
         return
     }
 
-    if (selectedUser.value === user && currentTemplateName.value === templateName) {
-        // 如果已经选择了相同的用户和模板，则不需要切换
-        return
+    const template = userConfigStore.getUserTemplate(user.uid, templateName)
+    const session: TemplateEditSession = {
+        id: uuidv4(),
+        uid: user.uid,
+        username: user.username || '',
+        templateName,
+        tabTitle: getSessionTitle(user.uid, templateName),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        draft: cloneTemplateConfig(template),
+        submittedOnce: false
     }
+    editSessions.value.push(session)
+    lastSubmit.value = ''
+    await setActiveSession(session.id)
+
+    // 滚动到顶部
+    nextTick(() => {
+        if (contentWrapperRef.value) {
+            contentWrapperRef.value.scrollTop = 0
+        }
+    })
+
+    const aid = session.draft?.aid
+    setTimeout(async () => {
+        if (!aid) return
+        try {
+            const currentSession = editSessions.value.find(item => item.id === session.id)
+            if (!currentSession) return
+            const newTemplate = await getNewTemplateFromAv(user.uid, aid)
+            const savedTemplate = userConfigStore.getUserTemplate(user.uid, templateName)
+            if (savedTemplate && hasUnsavedChanges(savedTemplate, newTemplate)) {
+                await ElMessageBox.confirm(
+                    `检测到本地模板内容与bilibili不一致，是否刷新？（此操作会丢失当前标签页未保存的更改）`,
+                    '',
+                    {
+                        confirmButtonText: '刷新并继续',
+                        cancelButtonText: '不刷新，仅显示当前',
+                        type: 'info'
+                    }
+                )
+                currentSession.draft = cloneTemplateConfig(newTemplate)
+                if (activeSessionId.value === session.id) {
+                    await loadTemplate()
+                }
+                schedulePersistSessions()
+            }
+        } catch (error) {
+            console.error('自动刷新模板数据失败:', error)
+        }
+    }, 666)
+}
+
+const closeSessionTab = async (sessionId: string) => {
+    const index = editSessions.value.findIndex(item => item.id === sessionId)
+    if (index < 0) return
+
+    const closing = editSessions.value[index]
+    const savedTemplate = userConfigStore.getUserTemplate(closing.uid, closing.templateName)
+    if (!closing.submittedOnce && savedTemplate && hasUnsavedChanges(savedTemplate, closing.draft)) {
+        try {
+            await ElMessageBox.confirm(
+                `标签页 "${closing.tabTitle}" 有未保存修改，确定关闭吗？`,
+                '关闭标签页',
+                {
+                    confirmButtonText: '关闭',
+                    cancelButtonText: '取消',
+                    type: 'warning'
+                }
+            )
+        } catch {
+            return
+        }
+    }
+
+    editSessions.value.splice(index, 1)
+    setAutoSubmitting(sessionId, false)
+    if (activeSessionId.value === sessionId) {
+        const fallback = editSessions.value[Math.max(0, index - 1)] || editSessions.value[0]
+        if (fallback) {
+            await setActiveSession(fallback.id)
+        } else {
+            activeSessionId.value = ''
+            selectedUser.value = null
+            currentTemplateName.value = ''
+            tags.value = []
+            selectedCategory.value = null
+            selectedSubCategory.value = null
+        }
+    }
+    schedulePersistSessions()
+}
+
+const handleSessionTabClick = async (pane: any) => {
+    if (!pane?.props?.name) return
+    if (pane.props.name === activeSessionId.value) return
+    await setActiveSession(String(pane.props.name))
+}
+
+const handleTabLabelMouseup = async (event: MouseEvent, sessionId: string) => {
+    if (event.button !== 1) return
+    event.preventDefault()
+    event.stopPropagation()
+    await closeSessionTab(sessionId)
+}
+
+// 选择模板（打开新标签页）
+const selectTemplate = async (user: any, templateName: string) => {
+    if (templateLoading.value) return
 
     templateLoading.value = true
     try {
-        lastSubmit.value = ''
-
-        selectedUser.value = user
-        currentTemplateName.value = templateName
-
-        // 滚动到顶部
-        nextTick(() => {
-            if (contentWrapperRef.value) {
-                contentWrapperRef.value.scrollTop = 0
-            }
-        })
-
-        // 加载模板数据到表单
-        await loadTemplate()
-
-        // 保存模板选择到localStorage
-        saveTemplateSelection(user.uid, templateName)
-
-        // 如果模板有 aid，主动刷新模板数据
-        const aid = currentTemplate.value?.aid
-        setTimeout(async () => {
-            if (aid) {
-                try {
-                    if (
-                        selectedUser.value?.uid === user.uid &&
-                        currentTemplateName.value === templateName
-                    ) {
-                        const newTemplate = await getNewTemplateFromAv(user.uid, aid)
-                        const currentTemplateData =
-                            userConfigStore.configRoot?.config[user.uid].templates[templateName]
-                        if (
-                            currentTemplateData &&
-                            hasUnsavedChanges(currentTemplateData, newTemplate)
-                        ) {
-                            await ElMessageBox.confirm(
-                                `检测到本地模板内容与bilibili不一致，是否刷新？（此操作会丢失所有未保存的更改）`,
-                                '',
-                                {
-                                    confirmButtonText: '刷新并继续',
-                                    cancelButtonText: '不刷新，仅显示当前',
-                                    type: 'info'
-                                }
-                            )
-                            await reloadTemplateFromAV(user.uid, aid)
-                        }
-                    }
-                } catch (error) {
-                    console.error('自动刷新模板数据失败:', error)
-                }
-            }
-        }, 666)
-        console.log(`已切换到模板: ${user.username} - ${templateName}`)
+        await openTemplateSession(user, templateName)
+        console.log(`已打开模板标签页: ${user.username} - ${templateName}`)
     } catch (error) {
-        console.error('切换模板失败:', error)
-        utilsStore.showMessage(`切换模板失败: ${error}`, 'error')
+        console.error('打开模板标签页失败:', error)
+        utilsStore.showMessage(`打开模板标签页失败: ${error}`, 'error')
     } finally {
         templateLoading.value = false
     }
@@ -2358,19 +4160,12 @@ const reloadTemplateFromAV = async (userUid: number, aid: number) => {
 // 加载模板数据到表单
 const loadTemplate = async () => {
     try {
-        // 如果没有模板，则使用默认模板配置
+        // 如果当前标签页草稿为空，则填充默认模板配置
         if (!currentTemplate.value) {
-            const defaultTemplate = userConfigStore.createDefaultTemplate()
-            // 直接设置到配置中
-            if (
-                selectedUser.value &&
-                currentTemplateName.value &&
-                userConfigStore.configRoot?.config
-            ) {
-                const userConfig = userConfigStore.configRoot.config[selectedUser.value.uid]
-                if (userConfig) {
-                    userConfig.templates[currentTemplateName.value] = defaultTemplate
-                }
+            if (currentSession.value) {
+                currentSession.value.draft = cloneTemplateConfig()
+                touchActiveSession()
+                schedulePersistSessions()
             }
 
             // 清空标签
@@ -2411,12 +4206,31 @@ const loadTemplate = async () => {
 }
 
 // 处理模板命令
-const handleTemplateCommand = async (command: string, user: any, template: any) => {
+const handleTemplateCommand = async (
+    command: string,
+    user: any,
+    template: any,
+    folderId?: string
+) => {
     switch (command) {
         case 'duplicate':
             try {
                 const newName = `${template.name}_副本`
                 await userConfigStore.duplicateUserTemplate(user.uid, template.name, newName)
+                const organizer = getUserOrganizer(user.uid)
+                if (folderId) {
+                    const folder = organizer.folders.find(item => item.id === folderId)
+                    if (folder) {
+                        if (!folder.order.includes(newName)) {
+                            folder.order.push(newName)
+                        }
+                    } else {
+                        ensureTemplateInOrganizer(user.uid, newName)
+                    }
+                } else {
+                    ensureTemplateInOrganizer(user.uid, newName)
+                }
+                saveTemplateOrganizer()
                 utilsStore.showMessage('模板复制成功', 'success')
             } catch (error) {
                 console.error('复制模板失败: ', error)
@@ -2467,6 +4281,28 @@ const handleTemplateCommand = async (command: string, user: any, template: any) 
 
                 // 再删除原模板
                 await userConfigStore.removeUserTemplate(user.uid, template.name)
+                const organizer = getUserOrganizer(user.uid)
+                const sourceFolder = organizer.folders.find(folder =>
+                    folder.order.includes(template.name)
+                )
+                removeTemplateFromOrganizer(user.uid, template.name)
+                removeTemplateFromOrganizer(user.uid, trimmedName)
+                if (sourceFolder) {
+                    sourceFolder.order.push(trimmedName)
+                } else {
+                    organizer.ungroupedOrder.push(trimmedName)
+                }
+                editSessions.value.forEach(session => {
+                    if (session.uid === user.uid && session.templateName === template.name) {
+                        session.templateName = trimmedName
+                        session.tabTitle = session.tabTitle.replace(template.name, trimmedName)
+                        if (session.id === activeSessionId.value) {
+                            currentTemplateName.value = trimmedName
+                        }
+                    }
+                })
+                saveTemplateOrganizer()
+                schedulePersistSessions()
 
                 // 更新当前选择
                 if (
@@ -2497,6 +4333,14 @@ const handleTemplateCommand = async (command: string, user: any, template: any) 
                 })
 
                 await userConfigStore.removeUserTemplate(user.uid, template_name)
+                removeTemplateFromOrganizer(user.uid, template_name)
+                saveTemplateOrganizer()
+                const deleteSessionIds = editSessions.value
+                    .filter(item => item.uid === user.uid && item.templateName === template_name)
+                    .map(item => item.id)
+                for (const sessionId of deleteSessionIds) {
+                    await closeSessionTab(sessionId)
+                }
 
                 // 如果删除的是当前选中的模板，清空选择
                 if (
@@ -2517,6 +4361,31 @@ const handleTemplateCommand = async (command: string, user: any, template: any) 
                 }
             }
             break
+
+        case 'move':
+            openMoveDialog(user.uid, template.name, folderId)
+            break
+
+        case 'move_root':
+            moveTemplateToRoot(user.uid, template.name)
+            break
+
+        case 'set_cover':
+            await selectTemplateCover(user.uid, template.name)
+            break
+
+        case 'clear_cover':
+            clearTemplateCoverPath(user.uid, template.name)
+            utilsStore.showMessage('已清除模板封面', 'success')
+            break
+
+        case 'move_up':
+            moveTemplatePosition(user.uid, template.name, 'up')
+            break
+
+        case 'move_down':
+            moveTemplatePosition(user.uid, template.name, 'down')
+            break
     }
 }
 
@@ -2529,22 +4398,16 @@ const handleTemplateCreated = async (userUid: number, templateName: string) => {
     // 自动选择新创建的模板
     const targetUser = loginUsers.value.find(user => user.uid === userUid)
     if (targetUser) {
-        selectedUser.value = targetUser
-        currentTemplateName.value = templateName
-
-        // 滚动到顶部
-        nextTick(() => {
-            if (contentWrapperRef.value) {
-                contentWrapperRef.value.scrollTop = 0
-            }
-        })
-
+        ensureTemplateInOrganizer(userUid, templateName)
+        saveTemplateOrganizer()
+        console.log(
+            `模板创建事件: uid=${userUid}, template=${templateName}, organizer=${JSON.stringify(
+                getUserOrganizer(userUid)
+            )}`
+        )
         templateLoading.value = true
-        await loadTemplate()
+        await openTemplateSession(targetUser, templateName)
         templateLoading.value = false
-
-        // 保存新创建的模板选择
-        saveTemplateSelection(userUid, templateName)
     }
 }
 
@@ -2617,6 +4480,7 @@ const selectCoverWithTauri = async () => {
     try {
         const selected = await open({
             multiple: false,
+            defaultPath: getDefaultCoverDir() || undefined,
             filters: [
                 {
                     name: 'Image',
@@ -2640,6 +4504,9 @@ const selectCoverWithTauri = async () => {
             } else {
                 throw new Error('封面上传失败')
             }
+            const coverPath = Array.isArray(selected) ? selected[0] : selected
+            const folder = coverPath.split(/[/\\]/).slice(0, -1).join('\\')
+            if (folder) setDefaultCoverDir(folder)
         } else {
             utilsStore.showMessage('请先选择用户和模板', 'error')
         }
@@ -2680,6 +4547,7 @@ const selectVideoWithTauri = async () => {
     try {
         const selected = await open({
             multiple: true,
+            defaultPath: getDefaultVideoPickerDir() || undefined,
             filters: [
                 {
                     name: 'Video',
@@ -2705,14 +4573,25 @@ const selectVideoWithTauri = async () => {
         var added = 0
 
         if (selected && Array.isArray(selected)) {
-            for (const videoPath of selected) {
+            const selectedPaths = selected as string[]
+            for (const videoPath of selectedPaths) {
                 added += await addVideoToCurrentForm(videoPath)
             }
 
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
+            if (selectedPaths.length > 0) {
+                const firstPath = selectedPaths[0] ? String(selectedPaths[0]) : ''
+                const folder = firstPath
+                    ? firstPath.split(/[/\\]/).slice(0, -1).join('\\')
+                    : ''
+                if (folder) setDefaultVideoPickerDir(folder)
+            }
         } else if (typeof selected === 'string') {
-            added += await addVideoToCurrentForm(selected)
+            const selectedPath = String(selected)
+            added += await addVideoToCurrentForm(selectedPath)
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
+            const folder = selectedPath.split(/[/\\]/).slice(0, -1).join('\\')
+            if (folder) setDefaultVideoPickerDir(folder)
         }
     } catch (error) {
         console.error('文件选择失败: ', error)
@@ -2867,11 +4746,15 @@ const createUpload = async () => {
 // 处理文件夹监控添加视频事件
 const handleAddVideosToForm = async (newVideos: any[]) => {
     templateLoading.value = true
-    for (const videoPath of newVideos) {
+    for (const item of newVideos) {
         try {
-            await addVideoToCurrentForm(videoPath)
+            if (typeof item === 'string') {
+                await addVideoToCurrentForm(item)
+            } else if (item?.path) {
+                await addVideoToCurrentForm(item.path, item.title)
+            }
         } catch (error) {
-            console.error(`添加视频失败: ${videoPath}`, error)
+            console.error('添加视频失败:', item, error)
         }
     }
     templateLoading.value = false
@@ -2910,7 +4793,7 @@ const allFilesUploaded = computed(() => {
     if (!currentForm.value?.videos || currentForm.value.videos.length === 0) {
         return false
     }
-    return currentForm.value.videos.every(video => video.complete && video.path === '')
+    return currentForm.value.videos.every(video => isVideoUploadCompleted(video))
 })
 
 // 提交视频
@@ -2945,17 +4828,28 @@ const submitTemplate = async () => {
                 console.error('添加到上传队列失败:', error)
                 utilsStore.showMessage(`添加到上传队列失败: ${error}`, 'error')
             }
-            setAutoSubmitting(selectedUser.value.uid, currentTemplateName.value, true)
+            if (!activeSessionId.value) {
+                utilsStore.showMessage('当前没有可用的编辑标签页', 'error')
+                return
+            }
+            setAutoSubmitting(activeSessionId.value, true)
             startAutoSubmitCheck()
             utilsStore.showMessage('已启动自动提交，上传完成后将自动提交', 'info')
         } else {
             // 第二次点击，取消自动提交
-            setAutoSubmitting(selectedUser.value.uid, currentTemplateName.value, false)
+            if (activeSessionId.value) {
+                setAutoSubmitting(activeSessionId.value, false)
+            }
             utilsStore.showMessage('已取消自动提交', 'info')
         }
         return
     } else {
-        performTemplateSubmit(selectedUser.value.uid, currentTemplateName.value, currentForm.value)
+        performTemplateSubmit(
+            selectedUser.value.uid,
+            currentTemplateName.value,
+            currentForm.value,
+            activeSessionId.value
+        )
     }
 }
 
@@ -3013,6 +4907,14 @@ const saveTemplateName = async () => {
         // 再删除原模板
         await userConfigStore.removeUserTemplate(selectedUser.value.uid, currentTemplateName.value)
 
+        editSessions.value.forEach(session => {
+            if (session.uid === selectedUser.value.uid && session.templateName === currentTemplateName.value) {
+                session.templateName = newName
+                session.tabTitle = session.tabTitle.replace(currentTemplateName.value, newName)
+            }
+        })
+        schedulePersistSessions()
+
         // 更新当前选择
         currentTemplateName.value = newName
 
@@ -3058,6 +4960,13 @@ const handleLogoutUser = async (uid: number) => {
     try {
         const success = await authStore.logoutUser(uid)
         if (success) {
+            const targetSessionIds = editSessions.value
+                .filter(session => session.uid === uid)
+                .map(session => session.id)
+            for (const sessionId of targetSessionIds) {
+                await closeSessionTab(sessionId)
+            }
+
             // 如果登出的用户正是当前选择的用户，清除相关记录
             if (selectedUser.value?.uid === uid) {
                 selectedUser.value = null
@@ -3112,22 +5021,41 @@ const refreshAllData = async () => {
 // 导出日志
 const exportLogs = async () => {
     try {
-        const zipPath = await utilsStore.exportLogs()
-        const zipName = zipPath.split(/[/\\]/).pop() || zipPath
+        const now = new Date()
+        const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+            now.getDate()
+        ).padStart(2, '0')}`
+        const { value: selectedDate } = await ElMessageBox.prompt(
+            '请输入日志日期（YYYY-MM-DD），留空表示全部日志',
+            '导出日志',
+            {
+                confirmButtonText: '下一步',
+                cancelButtonText: '取消',
+                inputPlaceholder: '例如 2026-03-23',
+                inputValue: localDate
+            }
+        )
+        const dateFilter = selectedDate?.trim()
+        const zipName = dateFilter
+            ? `logs_export_${dateFilter.replace(/-/g, '')}.zip`
+            : `logs_export_${localDate.replace(/-/g, '')}.zip`
+        const defaultExportDir = getDefaultLogExportDir()
 
         const savePath = await save({
-            defaultPath: zipName,
+            defaultPath: joinWinPath(defaultExportDir, zipName),
             filters: [{ name: 'ZIP', extensions: ['zip'] }]
         })
 
         if (savePath) {
-            // 复制 ZIP 文件到用户指定位置
-            await copyFile(zipPath, savePath)
-            await remove(zipPath)
-            console.log('文件已保存到：', savePath)
+            const parent = getParentDir(savePath)
+            if (parent) setDefaultLogExportDir(parent)
+            await utilsStore.exportLogs(savePath, dateFilter || undefined)
+            console.log('日志导出成功：', savePath)
         }
     } catch (error) {
-        console.error('导出日志失败:', error)
+        if (error !== 'cancel') {
+            console.error('导出日志失败:', error)
+        }
     }
 }
 
@@ -3244,7 +5172,28 @@ const checkUpdate = async () => {
     padding: 20px;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: auto;
+    width: 320px;
+    min-width: 280px;
+    max-width: 60vw;
+    flex: 0 0 auto;
+}
+
+.sidebar-resizer {
+    width: 8px;
+    cursor: col-resize;
+    background: linear-gradient(to right, transparent 0, #e5e7eb 50%, transparent 100%);
+    user-select: none;
+    flex: 0 0 8px;
+}
+
+.sidebar-resizer:hover {
+    background: linear-gradient(to right, transparent 0, #cbd5e1 50%, transparent 100%);
+}
+
+body.sidebar-resizing {
+    cursor: col-resize !important;
+    user-select: none;
 }
 
 .sidebar-content {
@@ -3408,6 +5357,77 @@ const checkUpdate = async () => {
     margin-left: 20px;
     margin-top: 10px;
     position: relative;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 8px;
+    align-items: start;
+}
+
+.template-tools {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    grid-column: 1 / -1;
+}
+
+.template-sort-select {
+    width: 130px;
+}
+
+.template-entry {
+    min-width: 0;
+}
+
+.template-entry.entry-folder {
+    grid-column: 1 / -1;
+}
+
+.template-folder-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 8px 0 4px;
+    padding: 0 6px;
+    color: #606266;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.template-folder-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.template-folder-cover {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid #e5e7eb;
+    background: #f5f7fa;
+    flex-shrink: 0;
+}
+
+.template-folder-title {
+    font-weight: 600;
+}
+
+.template-folder-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.folder-toggle-icon {
+    transition: transform 0.2s ease;
+    color: #909399;
+}
+
+.folder-toggle-icon.collapsed {
+    transform: rotate(-90deg);
 }
 
 .template-item {
@@ -3419,6 +5439,44 @@ const checkUpdate = async () => {
     margin-bottom: 5px;
     cursor: pointer;
     transition: all 0.3s;
+    position: relative;
+    min-width: 0;
+}
+
+.template-item[draggable='true'] {
+    cursor: grab;
+}
+
+.template-item-in-folder {
+    margin-left: 10px;
+}
+
+.template-cover {
+    width: 48px;
+    height: 48px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid #e5e7eb;
+    background: #f5f7fa;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+.move-dialog-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.move-dialog-select {
+    flex: 1;
+}
+
+.empty-folder {
+    margin-top: 8px;
+    color: #909399;
+    font-size: 12px;
+    text-align: center;
 }
 
 .template-item:hover {
@@ -3618,6 +5676,7 @@ const checkUpdate = async () => {
 
 .template-main {
     flex: 1;
+    min-width: 0;
 }
 
 .template-name {
@@ -3626,6 +5685,9 @@ const checkUpdate = async () => {
     display: flex;
     align-items: center;
     gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .unsaved-indicator {
@@ -3656,6 +5718,9 @@ const checkUpdate = async () => {
     font-size: 12px;
     color: #909399;
     margin-top: 2px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .main-content {
@@ -3708,6 +5773,23 @@ const checkUpdate = async () => {
 .form-header h3 {
     margin: 0;
     color: #303133;
+}
+
+.editor-tabs {
+    margin-bottom: 10px;
+}
+
+.editor-tab-label {
+    display: inline-block;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor-tab-label.auto-submit-tab {
+    color: #1d4ed8;
+    font-weight: 700;
 }
 
 .template-name-container {
@@ -4373,5 +6455,11 @@ const checkUpdate = async () => {
 
 .interactive-confirm-dialog-checkbox input {
     cursor: pointer;
+}
+
+.folder-apply-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
 }
 </style>

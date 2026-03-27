@@ -181,9 +181,12 @@ export const useUtilsStore = defineStore('template', () => {
     }
 
     // 导出日志
-    const exportLogs = async (): Promise<string> => {
+    const exportLogs = async (exportPath: string, dateFilter?: string): Promise<string> => {
         try {
-            const result = await invoke<string>('export_logs')
+            const result = await invoke<string>('export_logs', {
+                exportPath,
+                dateFilter: dateFilter || null
+            })
             showMessage('日志导出成功', 'success')
             return result
         } catch (error) {
@@ -211,9 +214,7 @@ export const useUtilsStore = defineStore('template', () => {
                 level,
                 messages: messages.map(msg => (typeof msg === 'string' ? msg : JSON.stringify(msg)))
             })
-        } catch (error) {
-            console.error('日志转发失败:', error)
-        }
+        } catch (_error) {}
     }
 
     return {
