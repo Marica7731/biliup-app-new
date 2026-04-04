@@ -100,7 +100,31 @@ pub struct TemplateConfig {
     #[serde(default)]
     pub is_only_self: u8,
     #[serde(default)]
+    pub space_hidden: u8,
+    #[serde(default)]
     pub watermark: u8,
+    #[serde(default)]
+    pub import_title_format_template: Option<String>,
+    #[serde(default)]
+    pub ai_title_format_template: Option<String>,
+    #[serde(default = "default_ai_title_source")]
+    pub ai_title_source: String,
+    #[serde(default)]
+    pub template_title_seed: Option<String>,
+    #[serde(default)]
+    pub imported_original_title: Option<String>,
+    #[serde(default)]
+    pub imported_clean_title: Option<String>,
+    #[serde(default)]
+    pub imported_date: Option<String>,
+    #[serde(default)]
+    pub imported_source_url: Option<String>,
+    #[serde(default)]
+    pub auto_close_after_submit: bool,
+}
+
+fn default_ai_title_source() -> String {
+    "clean".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +367,18 @@ impl ConfigRoot {
             compare_field!(up_close_reply, old, new);
             compare_field!(up_close_danmu, old, new);
             compare_field!(atomic_int, old, new);
+            compare_field!(is_only_self, old, new);
+            compare_field!(space_hidden, old, new);
+            compare_field!(watermark, old, new);
+            compare_field!(import_title_format_template, old, new);
+            compare_field!(ai_title_format_template, old, new);
+            compare_field!(ai_title_source, old, new);
+            compare_field!(template_title_seed, old, new);
+            compare_field!(imported_original_title, old, new);
+            compare_field!(imported_clean_title, old, new);
+            compare_field!(imported_date, old, new);
+            compare_field!(imported_source_url, old, new);
+            compare_field!(auto_close_after_submit, old, new);
         }
 
         compare_template_fields(old, new);
@@ -380,7 +416,17 @@ impl Default for TemplateConfig {
             up_close_danmu: 0,
             atomic_int: 0,
             is_only_self: 0,
+            space_hidden: 0,
             watermark: 0,
+            import_title_format_template: None,
+            ai_title_format_template: None,
+            ai_title_source: default_ai_title_source(),
+            template_title_seed: None,
+            imported_original_title: None,
+            imported_clean_title: None,
+            imported_date: None,
+            imported_source_url: None,
+            auto_close_after_submit: false,
         }
     }
 }

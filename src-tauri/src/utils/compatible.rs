@@ -174,7 +174,17 @@ impl CompatibilityConverter {
                 up_close_reply: if streamer_config.up_close_reply { 1 } else { 0 },
                 up_close_danmu: if streamer_config.up_close_danmu { 1 } else { 0 },
                 atomic_int: streamer_config.atomic_int,
+                space_hidden: 0,
                 watermark: 0, // 默认关闭
+                import_title_format_template: None,
+                ai_title_format_template: None,
+                ai_title_source: "clean".to_string(),
+                template_title_seed: None,
+                imported_original_title: None,
+                imported_clean_title: None,
+                imported_date: None,
+                imported_source_url: None,
+                auto_close_after_submit: false,
             };
 
             template.insert(streamer_name, template_config);

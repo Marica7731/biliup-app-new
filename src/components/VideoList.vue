@@ -16,11 +16,26 @@
                 </el-button>
                 <template #dropdown>
                     <el-dropdown-menu>
-                        <el-dropdown-item @click="sortVideosByName">
+                        <el-dropdown-item @click="openSortPreview('name', false)">
                             文件名 A-Z
                         </el-dropdown-item>
-                        <el-dropdown-item @click="sortVideosByMtime">
+                        <el-dropdown-item @click="openSortPreview('name', true)">
+                            文件名 Z-A
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="openSortPreview('mtime', false)">
                             修改时间
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="openSortPreview('mtime', true)">
+                            修改时间逆序
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="openSortPreview('date', false)">
+                            按标题日期
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="openSortPreview('date', true)">
+                            按标题日期逆序
+                        </el-dropdown-item>
+                        <el-dropdown-item divided @click="restoreOriginalOrder">
+                            恢复原顺序
                         </el-dropdown-item>
                     </el-dropdown-menu>
                 </template>
@@ -155,10 +170,13 @@
                         </div>
 
                         <!-- 进度条区域 -->
-                        <div class="progress-section">
+                        <div
+                            v-if="video.status !== 'Completed'"
+                            class="progress-section"
+                        >
                             <div
                                 class="progress-bar-container"
-                                v-if="video.status !== 'Completed' && video.status !== 'Failed'"
+                                v-if="video.status !== 'Failed'"
                             >
                                 <el-progress
                                     :percentage="video.progress"
@@ -176,18 +194,25 @@
                             </div>
                             <div
                                 class="upload-speed"
-                                v-if="video.status === 'Running' && video.speed > 0"
+                                :class="{
+                                    visible: video.status === 'Running' && video.speed > 0
+                                }"
                             >
-                                {{ formatUploadSpeed(video) }}
+                                {{
+                                    video.status === 'Running' && video.speed > 0
+                                        ? formatUploadSpeed(video)
+                                        : '\u00A0'
+                                    }}
                             </div>
                         </div>
-                        <!-- 完成时间显示 -->
-                        <span
-                            class="completed-time"
-                            v-if="video.status === 'Completed' && video.finished_at"
-                        >
-                            {{ formatFinishedTime(video.finished_at) }}
-                        </span>
+                        <div v-else class="completed-meta">
+                            <span
+                                class="completed-time"
+                                v-if="video.finished_at"
+                            >
+                                {{ formatFinishedTime(video.finished_at) }}
+                            </span>
+                        </div>
                     </div>
 
                     <!-- 文件操作按钮 -->
@@ -210,6 +235,7 @@
             v-model="showFolderWatchDialog"
             :current-videos="updatedVideos"
             :template-title="templateTitle"
+            :initial-folders="watchInitialFolders"
             @add-videos="handleAddVideos"
             @submit-videos="handleSubmitVideos"
         />
@@ -250,11 +276,27 @@
                 </div>
             </template>
         </el-dialog>
+        <el-dialog v-model="sortPreviewVisible" title="排序预览" width="560px">
+            <div class="batch-rename-tip">预览前 12 项，确认后才会真正修改当前列表顺序。</div>
+            <div class="sort-preview-meta">{{ sortPreviewDescription }}</div>
+            <div class="sort-preview-list">
+                <div v-for="(item, index) in sortPreviewItems" :key="item.id || index" class="sort-preview-item">
+                    <span class="sort-preview-index">{{ index + 1 }}.</span>
+                    <span class="sort-preview-text">{{ getVideoDisplayName(item) }}</span>
+                </div>
+            </div>
+            <template #footer>
+                <div class="dialog-footer">
+                    <el-button @click="sortPreviewVisible = false">取消</el-button>
+                    <el-button type="primary" @click="applySortPreview">应用</el-button>
+                </div>
+            </template>
+        </el-dialog>
     </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
     CircleCheck,
     Loading,
@@ -275,6 +317,8 @@ interface Props {
     isDragOver?: boolean
     uploading?: boolean
     templateTitle?: string
+    watchOpenToken?: number
+    watchInitialFolder?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -306,9 +350,50 @@ const batchRenameText = ref('')
 const batchRenameAll = ref(true)
 const batchRenameStart = ref(1)
 const batchRenameEnd = ref(1)
+const sortPreviewVisible = ref(false)
+const sortPreviewItems = ref<any[]>([])
+const sortPreviewMode = ref<'name' | 'mtime' | 'date'>('name')
+const sortPreviewReverse = ref(false)
+const sortPreviewDescription = ref('')
+const originalOrderMap = ref<Record<string, number>>({})
+const originalOrderSeed = ref(0)
+const lastNonZeroSpeedMap = ref<Record<string, { speed: number; at: number }>>({})
 
 // 模板标题
 const templateTitle = computed(() => props.templateTitle)
+const watchInitialFolders = computed(() =>
+    props.watchInitialFolder ? [props.watchInitialFolder] : []
+)
+
+watch(
+    () => props.watchOpenToken,
+    (newValue, oldValue) => {
+        if (newValue === undefined || newValue === null) return
+        if (newValue === oldValue) return
+        showFolderWatchDialog.value = true
+    }
+)
+
+watch(
+    () => props.videos,
+    videos => {
+        const aliveIds = new Set<string>()
+        for (const video of videos || []) {
+            const key = video.id || video.path || video.filename || video.title
+            if (!key) continue
+            aliveIds.add(String(video.id || key))
+            if (originalOrderMap.value[key] === undefined) {
+                originalOrderMap.value[key] = originalOrderSeed.value++
+            }
+        }
+        for (const key of Object.keys(lastNonZeroSpeedMap.value)) {
+            if (!aliveIds.has(key)) {
+                delete lastNonZeroSpeedMap.value[key]
+            }
+        }
+    },
+    { immediate: true, deep: true }
+)
 
 // 用于触发时间更新的响应式变量
 const currentTime = ref(Date.now())
@@ -332,6 +417,7 @@ const updatedVideos = computed(() => {
     if (!props.videos || props.videos.length === 0) return []
 
     let hasChanges = false
+    const now = Date.now()
     const updatedList = props.videos.map(video => {
         const updatedVideo = { ...video }
         const originalVideo = { ...video }
@@ -347,7 +433,19 @@ const updatedVideos = computed(() => {
                 updatedVideo.status = task.status || 'Waiting'
                 updatedVideo.errorMessage = task.error_message || ''
                 updatedVideo.totalSize = task.total_size || 0
-                updatedVideo.speed = task.speed || 0
+                const taskSpeed = task.speed || 0
+                if (taskSpeed > 0) {
+                    lastNonZeroSpeedMap.value[updatedVideo.id] = { speed: taskSpeed, at: now }
+                    updatedVideo.speed = taskSpeed
+                } else if (
+                    task.status === 'Running' &&
+                    lastNonZeroSpeedMap.value[updatedVideo.id] &&
+                    now - lastNonZeroSpeedMap.value[updatedVideo.id].at < 5000
+                ) {
+                    updatedVideo.speed = lastNonZeroSpeedMap.value[updatedVideo.id].speed
+                } else {
+                    updatedVideo.speed = 0
+                }
                 updatedVideo.progress = task.progress || 0
                 updatedVideo.finished_at = task.finished_at || 0
                 updatedVideo.cid = task.video.cid || 0
@@ -582,9 +680,65 @@ const handleSubmitVideos = () => {
 }
 
 const getVideoDisplayName = (video: any) => {
+    if (video.title) return video.title
     if (video.filename) return video.filename
     if (video.path) return video.path.split(/[/\\]/).pop() || video.path
-    return video.title || ''
+    return ''
+}
+
+const collator = new Intl.Collator(['zh-CN', 'ja-JP', 'en-US'], {
+    numeric: true,
+    sensitivity: 'base'
+})
+
+const extractBracketDate = (text: string) => {
+    const match = String(text || '').match(/\[(\d{4}-\d{2}-\d{2})\]/)
+    return match?.[1] || ''
+}
+
+const sortVideos = (mode: 'name' | 'mtime' | 'date', reverse = false) => {
+    return [...(props.videos || [])].sort((a, b) => {
+        if (mode === 'mtime') {
+            const diff = (b.mtime || 0) - (a.mtime || 0)
+            return reverse ? -diff : diff
+        }
+        if (mode === 'date') {
+            const aDate = extractBracketDate(getVideoDisplayName(a))
+            const bDate = extractBracketDate(getVideoDisplayName(b))
+            const dateDiff = aDate.localeCompare(bDate)
+            if (dateDiff !== 0) return reverse ? -dateDiff : dateDiff
+        }
+        const nameDiff = collator.compare(getVideoDisplayName(a), getVideoDisplayName(b))
+        return reverse ? -nameDiff : nameDiff
+    })
+}
+
+const openSortPreview = (mode: 'name' | 'mtime' | 'date', reverse = false) => {
+    if (!props.videos || props.videos.length === 0) return
+    sortPreviewMode.value = mode
+    sortPreviewReverse.value = reverse
+    sortPreviewItems.value = sortVideos(mode, reverse).slice(0, 12)
+    const labelMap = { name: '文件名', mtime: '修改时间', date: '标题日期' }
+    sortPreviewDescription.value = `${labelMap[mode]} · ${reverse ? '逆序' : '正序'}`
+    sortPreviewVisible.value = true
+}
+
+const applySortPreview = () => {
+    emit('update:videos', sortVideos(sortPreviewMode.value, sortPreviewReverse.value))
+    sortPreviewVisible.value = false
+}
+
+const restoreOriginalOrder = () => {
+    if (!props.videos || props.videos.length === 0) return
+    const restored = [...props.videos].sort((a, b) => {
+        const aKey = a.id || a.path || a.filename || a.title
+        const bKey = b.id || b.path || b.filename || b.title
+        return (
+            (originalOrderMap.value[aKey] ?? Number.MAX_SAFE_INTEGER) -
+            (originalOrderMap.value[bKey] ?? Number.MAX_SAFE_INTEGER)
+        )
+    })
+    emit('update:videos', restored)
 }
 
 const openBatchRename = () => {
@@ -633,25 +787,6 @@ const applyBatchRename = () => {
     batchRenameVisible.value = false
 }
 
-const sortVideosByName = () => {
-    if (!props.videos || props.videos.length === 0) return
-    const newVideos = [...props.videos].sort((a, b) => {
-        const aName = getVideoDisplayName(a)
-        const bName = getVideoDisplayName(b)
-        return aName.localeCompare(bName, 'zh-CN')
-    })
-    emit('update:videos', newVideos)
-}
-
-const sortVideosByMtime = () => {
-    if (!props.videos || props.videos.length === 0) return
-    const newVideos = [...props.videos].sort((a, b) => {
-        const aTime = a.mtime || 0
-        const bTime = b.mtime || 0
-        return bTime - aTime
-    })
-    emit('update:videos', newVideos)
-}
 </script>
 
 <style scoped>
@@ -749,6 +884,27 @@ const sortVideosByMtime = () => {
     justify-content: center;
     width: 16px;
     height: 16px;
+    min-width: 16px;
+    min-height: 16px;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.video-status-icon :deep(.el-icon) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+    transform-origin: center center;
+}
+
+.video-status-icon :deep(svg) {
+    display: block;
+    width: 14px;
+    height: 14px;
 }
 
 .status-complete {
@@ -760,6 +916,8 @@ const sortVideosByMtime = () => {
     color: #409eff;
     font-size: 12px;
     animation: rotate 1s linear infinite;
+    transform-origin: center center;
+    will-change: transform;
 }
 
 .status-pending {
@@ -796,6 +954,8 @@ const sortVideosByMtime = () => {
     display: flex;
     flex-direction: column;
     gap: 1px;
+    min-height: 34px;
+    justify-content: center;
 }
 
 .video-title-row {
@@ -803,6 +963,7 @@ const sortVideosByMtime = () => {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    min-height: 18px;
 }
 
 .video-title-container {
@@ -899,12 +1060,15 @@ const sortVideosByMtime = () => {
     flex-direction: column;
     gap: 1px;
     margin-top: 1px;
+    min-height: 16px;
+    justify-content: center;
 }
 
 .progress-bar-container {
     display: flex;
     align-items: center;
     gap: 4px;
+    min-height: 13px;
 }
 
 .progress-bar-container :deep(.el-progress) {
@@ -926,6 +1090,19 @@ const sortVideosByMtime = () => {
     text-align: right;
     font-family: 'Courier New', monospace;
     line-height: 1.2;
+    min-height: 12px;
+    visibility: hidden;
+}
+
+.upload-speed.visible {
+    visibility: visible;
+}
+
+.completed-meta {
+    display: flex;
+    align-items: center;
+    min-height: 12px;
+    margin-top: 1px;
 }
 
 .error-message {
@@ -970,6 +1147,45 @@ const sortVideosByMtime = () => {
     margin-bottom: 8px;
 }
 
+.sort-preview-meta {
+    font-size: 12px;
+    color: #606266;
+    margin-bottom: 10px;
+}
+
+.sort-preview-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid #ebeef5;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #fafafa;
+}
+
+.sort-preview-item {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 6px 0;
+    border-bottom: 1px dashed #ebeef5;
+}
+
+.sort-preview-item:last-child {
+    border-bottom: none;
+}
+
+.sort-preview-index {
+    width: 24px;
+    flex-shrink: 0;
+    color: #909399;
+}
+
+.sort-preview-text {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+}
+
 .batch-range-row {
     display: flex;
     align-items: center;
@@ -999,7 +1215,11 @@ const sortVideosByMtime = () => {
     font-size: 10px;
     color: #67c23a;
     font-weight: 500;
-    margin-left: 8px;
+    min-height: 12px;
+    line-height: 12px;
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
 }
 
 /* 警告视频样式 */

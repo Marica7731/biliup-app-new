@@ -22,6 +22,14 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace, warn};
 
+const RATE_LIMIT_COOLDOWN_SECS: i64 = 300;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UploadRuntimeStatus {
+    pub cooldown_until_ms: Option<i64>,
+    pub cooldown_secs: i64,
+}
+
 // define a macro :  task_title!(task_mutex)
 macro_rules! task_title {
     ($task_mutex:expr) => {
@@ -34,6 +42,7 @@ pub struct UploadService {
     upload_handle: Arc<Mutex<HashMap<String, task::JoinHandle<()>>>>,
     _upload_backgnd: task::JoinHandle<()>,
     max_running: Arc<Mutex<u32>>,
+    cooldown_until_ms: Arc<Mutex<Option<i64>>>,
     stop_tx: mpsc::Sender<()>,
 }
 
@@ -49,6 +58,8 @@ impl UploadService {
     pub fn new(max_curr: u32) -> Self {
         let max_running = Arc::new(Mutex::new(max_curr));
         let max_running_clone = Arc::clone(&max_running);
+        let cooldown_until_ms = Arc::new(Mutex::new(None));
+        let cooldown_until_ms_clone = Arc::clone(&cooldown_until_ms);
 
         let upload_queue = Arc::new(Mutex::new(IndexMap::new()));
         let upload_queue_clone = Arc::clone(&upload_queue);
@@ -66,12 +77,21 @@ impl UploadService {
                     upload_queue_clone,
                     upload_handle_clone,
                     max_running_clone,
+                    cooldown_until_ms_clone,
                     stop_rx,
                 )
                 .await;
             }),
             max_running,
+            cooldown_until_ms,
             stop_tx,
+        }
+    }
+
+    pub async fn get_runtime_status(&self) -> UploadRuntimeStatus {
+        UploadRuntimeStatus {
+            cooldown_until_ms: *self.cooldown_until_ms.lock().await,
+            cooldown_secs: RATE_LIMIT_COOLDOWN_SECS,
         }
     }
 
@@ -173,6 +193,18 @@ impl UploadService {
 
     pub async fn retry_upload(&self, task_id: &str) -> Result<bool> {
         if let Some(task_mutex) = self.upload_queue.lock().await.get(task_id) {
+            {
+                let task = task_mutex.lock().await;
+                if task.is_completed() {
+                    warn!("忽略对已完成任务的重试请求: {}", task.title());
+                    return Ok(false);
+                }
+                if task.video.path.trim().is_empty() {
+                    warn!("忽略空路径任务的重试请求: {}", task.title());
+                    return Ok(false);
+                }
+            }
+
             task_mutex.lock().await.cancel();
 
             let handle = self.upload_handle.lock().await.remove(task_id);
@@ -200,6 +232,7 @@ async fn upload_background(
     queue: Arc<Mutex<IndexMap<String, Arc<Mutex<UploadTask>>>>>,
     handle: Arc<Mutex<HashMap<String, task::JoinHandle<()>>>>,
     max_running: Arc<Mutex<u32>>,
+    cooldown_until_ms: Arc<Mutex<Option<i64>>>,
     mut stop_rx: mpsc::Receiver<()>,
 ) {
     let mut one_sec = tokio::time::interval(tokio::time::Duration::from_secs(1));
@@ -207,13 +240,14 @@ async fn upload_background(
         let queue_clone = Arc::clone(&queue);
         let handle_clone = Arc::clone(&handle);
         let max_running_clone = Arc::clone(&max_running);
+        let cooldown_until_ms_clone = Arc::clone(&cooldown_until_ms);
         select! {
             _ = stop_rx.recv() => {
                 info!("上传服务已停止");
                 return;
             }
             _ = one_sec.tick() => {
-                upload_background_interval(queue_clone, handle_clone, max_running_clone).await;
+                upload_background_interval(queue_clone, handle_clone, max_running_clone, cooldown_until_ms_clone).await;
             }
         }
     }
@@ -223,7 +257,21 @@ async fn upload_background_interval(
     queue: Arc<Mutex<IndexMap<String, Arc<Mutex<UploadTask>>>>>,
     handle: Arc<Mutex<HashMap<String, task::JoinHandle<()>>>>,
     max_running: Arc<Mutex<u32>>,
+    cooldown_until_ms: Arc<Mutex<Option<i64>>>,
 ) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    {
+        let mut cooldown_lock = cooldown_until_ms.lock().await;
+        if let Some(until_ms) = *cooldown_lock {
+            if until_ms > now_ms {
+                trace!("上传服务处于冷却期，剩余 {} ms", until_ms - now_ms);
+                return;
+            }
+            *cooldown_lock = None;
+            info!("上传服务冷却结束，恢复自动提交");
+        }
+    }
+
     let current_running = handle.lock().await.len() as u32;
     let mut remain = *max_running.lock().await - current_running;
     if remain > 0 {
@@ -253,13 +301,36 @@ async fn upload_background_interval(
                 continue;
             }
             let task_mutex_clone = Arc::clone(&task_mutex);
+            let cooldown_until_ms_for_task = Arc::clone(&cooldown_until_ms);
             handle.lock().await.insert(
                 task_id,
                 task::spawn(async move {
                     let task = Arc::clone(&task_mutex_clone);
                     if let Err(e) = upload_impl(task).await {
-                        error!("上传任务失败: {}", e);
-                        task_mutex_clone.lock().await.fail(e.to_string());
+                        let err_text = e.to_string();
+                        if is_upload_rate_limited(&err_text) {
+                            let retry_count;
+                            let task_title;
+                            {
+                                let mut task_guard = task_mutex_clone.lock().await;
+                                task_guard.retry();
+                                retry_count = task_guard.retry_count();
+                                task_title = task_guard.title();
+                            }
+                            let cooldown_secs = RATE_LIMIT_COOLDOWN_SECS;
+                            let until_ms = chrono::Utc::now().timestamp_millis() + cooldown_secs * 1000;
+                            *cooldown_until_ms_for_task.lock().await = Some(until_ms);
+                            warn!(
+                                "上传限流，任务延迟重试: {} | retry_count={} | cooldown={}s | {}",
+                                task_title,
+                                retry_count,
+                                cooldown_secs,
+                                err_text
+                            );
+                        } else {
+                            error!("上传任务失败: {}", err_text);
+                            task_mutex_clone.lock().await.fail(err_text);
+                        }
                     }
                 }),
             );
@@ -270,6 +341,15 @@ async fn upload_background_interval(
             break;
         }
     }
+}
+
+fn is_upload_rate_limited(error_text: &str) -> bool {
+    let text = error_text.to_lowercase();
+    text.contains("upload rate limit")
+        || text.contains("code: 601")
+        || text.contains("\"code\":406")
+        || text.contains("您上传视频过快")
+        || text.contains("稍作休息后再继续")
 }
 
 /// 上传进度条结构体

@@ -37,6 +37,20 @@ pub async fn read_dir_recursive(
         .map_err(|e| format!("读取目录失败: {e}"))
 }
 
+/// 读取文本文件内容
+#[tauri::command]
+pub async fn read_text_file(file_path: String) -> Result<String, String> {
+    let bytes = fs::read(&file_path).map_err(|e| format!("读取文本文件失败: {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// 读取文件并返回 base64
+#[tauri::command]
+pub async fn read_file_base64(file_path: String) -> Result<String, String> {
+    let bytes = fs::read(&file_path).map_err(|e| format!("读取文件失败: {e}"))?;
+    Ok(encode_base64(&bytes))
+}
+
 /// 上传封面并进行返回url
 #[tauri::command]
 pub async fn upload_cover(app: tauri::AppHandle, uid: u64, file: String) -> Result<String, String> {
@@ -515,19 +529,13 @@ pub async fn export_logs(export_path: String, date_filter: Option<String>) -> Re
                     let file_name = entry.file_name().to_string_lossy().to_string();
                     if let Some(filter_date) = parsed_filter.as_ref() {
                         let date_text = date_filter.as_deref().unwrap_or("");
-                        let mut include = file_name.contains(date_text);
+                        let mut include = file_name.contains(&format!("biliup-{}_", date_text));
                         if !include {
                             if let Ok(meta) = fs::metadata(entry.path()) {
                                 if let Ok(modified) = meta.modified() {
                                     let local_time: DateTime<Local> = modified.into();
                                     include = local_time.date_naive() == *filter_date;
                                 }
-                            }
-                        }
-                        if !include {
-                            if let Ok(bytes) = fs::read(entry.path()) {
-                                let content = String::from_utf8_lossy(&bytes);
-                                include = content.contains(date_text);
                             }
                         }
                         if !include {
@@ -562,6 +570,175 @@ pub async fn export_logs(export_path: String, date_filter: Option<String>) -> Re
         .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
 
     zip.finish().map_err(|e| format!("完成ZIP文件失败: {e}"))?;
+
+    Ok(export_path)
+}
+
+#[tauri::command]
+pub async fn export_logs_since(export_path: String, since_ts: i64) -> Result<String, String> {
+    use chrono::{DateTime, Local, TimeZone};
+    use std::fs;
+    use std::io::Write;
+    use zip::ZipWriter;
+
+    let log_dir = crate::utils::get_log_path().map_err(|e| format!("获取日志目录失败: {e}"))?;
+    let zip_file = fs::File::create(&export_path).map_err(|e| format!("创建ZIP文件失败: {e}"))?;
+    let mut zip = ZipWriter::new(zip_file);
+    let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let since_dt = Local
+        .timestamp_opt(since_ts, 0)
+        .single()
+        .ok_or("启动时间戳无效")?;
+
+    let mut matched_files: Vec<String> = Vec::new();
+    let mut read_failed_files: Vec<String> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("log") {
+                continue;
+            }
+
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let include = fs::metadata(entry.path())
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .map(|modified| {
+                    let local_time: DateTime<Local> = modified.into();
+                    local_time >= since_dt
+                })
+                .unwrap_or(false);
+
+            if !include {
+                continue;
+            }
+
+            if let Ok(content) = fs::read(entry.path()) {
+                zip.start_file(&file_name, options)
+                    .map_err(|e| format!("创建ZIP条目失败: {e}"))?;
+                zip.write_all(&content)
+                    .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
+                matched_files.push(file_name);
+            } else {
+                read_failed_files.push(file_name);
+            }
+        }
+    }
+
+    let manifest = format!(
+        "since={}\nmatched_files={}\n{}\nread_failed_files={}\n{}\n",
+        since_dt.format("%Y-%m-%d %H:%M:%S"),
+        matched_files.len(),
+        matched_files.join("\n"),
+        read_failed_files.len(),
+        read_failed_files.join("\n")
+    );
+    zip.start_file("export_manifest.txt", options)
+        .map_err(|e| format!("创建ZIP条目失败: {e}"))?;
+    zip.write_all(manifest.as_bytes())
+        .map_err(|e| format!("写入ZIP文件失败: {e}"))?;
+
+    zip.finish().map_err(|e| format!("完成ZIP文件失败: {e}"))?;
+    Ok(export_path)
+}
+
+#[tauri::command]
+pub async fn clear_old_logs(before_ts: Option<i64>) -> Result<u32, String> {
+    use chrono::{DateTime, Local, TimeZone};
+    use std::fs;
+
+    let log_dir = crate::utils::get_log_path().map_err(|e| format!("获取日志目录失败: {e}"))?;
+    let before_dt = before_ts.and_then(|ts| Local.timestamp_opt(ts, 0).single());
+    let mut removed = 0u32;
+
+    if let Ok(entries) = fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("log") {
+                continue;
+            }
+
+            let should_remove = if let Some(limit) = before_dt {
+                fs::metadata(entry.path())
+                    .ok()
+                    .and_then(|meta| meta.modified().ok())
+                    .map(|modified| {
+                        let local_time: DateTime<Local> = modified.into();
+                        local_time < limit
+                    })
+                    .unwrap_or(false)
+            } else {
+                true
+            };
+
+            if should_remove && fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+
+    Ok(removed)
+}
+
+#[tauri::command]
+pub async fn export_current_session_log(export_path: String, since_ts: i64) -> Result<String, String> {
+    use chrono::{DateTime, Local, TimeZone};
+    use std::fs;
+    use std::io::Write;
+
+    let log_dir = crate::utils::get_log_path().map_err(|e| format!("获取日志目录失败: {e}"))?;
+    let since_dt = Local
+        .timestamp_opt(since_ts, 0)
+        .single()
+        .ok_or("启动时间戳无效")?;
+
+    let mut matched: Vec<(String, Vec<u8>)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("log") {
+                continue;
+            }
+            let include = fs::metadata(entry.path())
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .map(|modified| {
+                    let local_time: DateTime<Local> = modified.into();
+                    local_time >= since_dt
+                })
+                .unwrap_or(false);
+            if !include {
+                continue;
+            }
+            if let Ok(content) = fs::read(entry.path()) {
+                matched.push((entry.file_name().to_string_lossy().to_string(), content));
+            }
+        }
+    }
+
+    if matched.is_empty() {
+        return Err("未找到本次启动日志".to_string());
+    }
+
+    matched.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut output = fs::File::create(&export_path).map_err(|e| format!("创建日志文件失败: {e}"))?;
+    for (index, (name, content)) in matched.iter().enumerate() {
+        if matched.len() > 1 {
+            let header = format!("===== {} =====\n", name);
+            output
+                .write_all(header.as_bytes())
+                .map_err(|e| format!("写入日志失败: {e}"))?;
+        }
+        output
+            .write_all(content)
+            .map_err(|e| format!("写入日志失败: {e}"))?;
+        if index + 1 < matched.len() {
+            output
+                .write_all(b"\n\n")
+                .map_err(|e| format!("写入日志失败: {e}"))?;
+        }
+    }
 
     Ok(export_path)
 }

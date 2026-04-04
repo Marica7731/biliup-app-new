@@ -23,6 +23,12 @@
                     <el-button type="info" size="small" @click="exportLogs" title="导出日志">
                         导出日志
                     </el-button>
+                    <el-button type="info" size="small" @click="exportCurrentSessionLogs" title="导出本次启动日志">
+                        本次日志
+                    </el-button>
+                    <el-button type="warning" size="small" @click="clearOldLogs" title="清理旧日志">
+                        清理旧日志
+                    </el-button>
                     <el-button type="primary" size="small" @click="checkUpdate" title="检查更新">
                         检查更新
                     </el-button>
@@ -240,6 +246,16 @@
                                                             >设置封面</el-dropdown-item
                                                         >
                                                         <el-dropdown-item
+                                                            :disabled="!canUseCurrentTabCover"
+                                                            @click.stop="
+                                                                useCurrentTabCoverForFolder(
+                                                                    userTemplate.user.uid,
+                                                                    item.folderId
+                                                                )
+                                                            "
+                                                            >使用当前标签页封面</el-dropdown-item
+                                                        >
+                                                        <el-dropdown-item
                                                             @click.stop="
                                                                 clearFolderCoverPath(
                                                                     userTemplate.user.uid,
@@ -279,14 +295,7 @@
                                             active:
                                                 selectedUser?.uid === userTemplate.user.uid &&
                                                 currentTemplateName === item.template.name,
-                                            'auto-submitting':
-                                                highlightAutoSubmitting &&
-                                                isTemplateAutoSubmitting(
-                                                    userTemplate.user.uid,
-                                                    item.template.name
-                                                ),
                                             'auto-submitting-simple':
-                                                !highlightAutoSubmitting &&
                                                 isTemplateAutoSubmitting(
                                                     userTemplate.user.uid,
                                                     item.template.name
@@ -419,6 +428,11 @@
                                                     >
                                                     <el-dropdown-item command="set_cover"
                                                         >设置封面</el-dropdown-item
+                                                    >
+                                                    <el-dropdown-item
+                                                        command="use_tab_cover"
+                                                        :disabled="!canUseCurrentTabCover"
+                                                        >使用当前标签页封面</el-dropdown-item
                                                     >
                                                     <el-dropdown-item command="clear_cover"
                                                         >清除封面</el-dropdown-item
@@ -629,6 +643,17 @@
                                                 选择模板文件夹
                                             </el-button>
                                             <el-button
+                                                v-if="canOpenImportedSourceUrl"
+                                                type="primary"
+                                                text
+                                                size="small"
+                                                @click.stop="openImportedSourceUrl"
+                                                title="用默认浏览器打开导入文件夹对应的原视频链接"
+                                                :disabled="templateLoading"
+                                            >
+                                                打开原视频
+                                            </el-button>
+                                            <el-button
                                                 type="danger"
                                                 text
                                                 size="small"
@@ -651,13 +676,71 @@
                                 <el-collapse-transition>
                                     <div v-show="!cardCollapsed.basic" class="card-content">
                                         <el-form-item label="视频标题" required>
-                                            <el-input
-                                                v-model="currentForm.title"
-                                                placeholder="请输入视频标题"
-                                                maxlength="80"
-                                                show-word-limit
-                                                :disabled="templateLoading"
-                                            />
+                                            <div class="ai-field-block">
+                                                <el-input
+                                                    v-model="currentForm.title"
+                                                    placeholder="请输入视频标题"
+                                                    maxlength="80"
+                                                    show-word-limit
+                                                    :disabled="templateLoading"
+                                                />
+                                                <div class="ai-inline-actions">
+                                                <el-button
+                                                        size="small"
+                                                        :loading="aiWorking.title"
+                                                        :disabled="templateLoading || !canRunAITitle"
+                                                        @click="runAITitle()"
+                                                    >
+                                                        AI 标题
+                                                    </el-button>
+                                                    <el-button
+                                                        size="small"
+                                                        text
+                                                        :disabled="templateLoading"
+                                                        @click="showTemplateTitleSettings = !showTemplateTitleSettings"
+                                                    >
+                                                        标题规则
+                                                    </el-button>
+                                                </div>
+                                            </div>
+                                            <el-collapse-transition>
+                                                <div v-show="showTemplateTitleSettings" class="template-title-settings">
+                                                    <el-form-item label="AI 标题源">
+                                                        <el-radio-group v-model="currentForm.ai_title_source">
+                                                            <el-radio value="clean">AI翻译时使用净化标题</el-radio>
+                                                            <el-radio value="original">AI翻译时使用原标题</el-radio>
+                                                        </el-radio-group>
+                                                        <div class="form-tip">默认只把净化标题送给 AI。切到原标题时，AI 会收到未净化标题。</div>
+                                                        <div class="form-tip" v-if="!canRunAITitle">请先通过“选择模板文件夹”导入标题源字段，再使用 AI 标题。</div>
+                                                    </el-form-item>
+                                                    <el-form-item label="导入标题预设">
+                                                        <el-input
+                                                            v-model="currentForm.import_title_format_template"
+                                                            type="textarea"
+                                                            :rows="2"
+                                                            placeholder="留空则使用全局默认"
+                                                        />
+                                                        <div class="form-tip">中文注释：预设标题 `${template_title}`，日期 `${date}`，月份 `${month}`，原标题 `${original_title}`，净化标题 `${clean_title}`，视频ID `${video_id}`，上传者名称 `${uploader_name}`，频道ID `${uploader_handle}`，上传者完整字段 `${uploader_credit}`，标签列表 `${tag_list}`，第1标签 `${tag1}`，第2标签 `${tag2}`</div>
+                                                        <div class="template-title-preview">
+                                                            <div class="template-title-preview-label">导入标题预览</div>
+                                                            <div class="template-title-preview-value">{{ currentImportTitlePreview || '暂无可预览内容' }}</div>
+                                                        </div>
+                                                    </el-form-item>
+                                                    <el-form-item label="AI 标题预设">
+                                                        <el-input
+                                                            v-model="currentForm.ai_title_format_template"
+                                                            type="textarea"
+                                                            :rows="2"
+                                                            placeholder="留空则使用全局默认"
+                                                        />
+                                                        <div class="form-tip">额外变量：AI 翻译后标题 `${translated_title}`。其余变量同上。</div>
+                                                        <div class="template-title-preview">
+                                                            <div class="template-title-preview-label">AI 标题拼接预览</div>
+                                                            <div class="template-title-preview-value">{{ currentAITitleTemplatePreview || '暂无可预览内容' }}</div>
+                                                        </div>
+                                                    </el-form-item>
+                                                </div>
+                                            </el-collapse-transition>
                                         </el-form-item>
 
                                         <el-form-item label="封面">
@@ -886,6 +969,8 @@
                                             :is-drag-over="isDragOver"
                                             :uploading="uploading"
                                             :template-title="currentTemplateName"
+                                            :watch-open-token="watchOpenToken"
+                                            :watch-initial-folder="watchInitialFolder"
                                             :disabled="templateLoading"
                                             @select-video="selectVideoWithTauri"
                                             @clear-all-videos="clearAllVideos"
@@ -930,11 +1015,23 @@
                                 <el-collapse-transition>
                                     <div v-show="!cardCollapsed.tags" class="card-content">
                                         <el-form-item label="视频标签">
-                                            <TagView
-                                                ref="tagViewRef"
-                                                v-model="tags"
-                                                :disabled="templateLoading"
-                                            />
+                                            <div class="ai-field-block">
+                                                <TagView
+                                                    ref="tagViewRef"
+                                                    v-model="tags"
+                                                    :disabled="templateLoading"
+                                                />
+                                                <div class="ai-inline-actions">
+                                                    <el-button
+                                                        size="small"
+                                                        :loading="aiWorking.tag"
+                                                        :disabled="templateLoading"
+                                                        @click="runAITag()"
+                                                    >
+                                                        AI 标签
+                                                    </el-button>
+                                                </div>
+                                            </div>
                                         </el-form-item>
 
                                         <el-form-item v-if="!currentForm.aid" label="参与活动">
@@ -985,15 +1082,30 @@
                                 <el-collapse-transition>
                                     <div v-show="!cardCollapsed.description" class="card-content">
                                         <el-form-item label="简介">
-                                            <el-input
-                                                v-model="currentForm.desc"
-                                                type="textarea"
-                                                :rows="6"
-                                                placeholder="请输入视频简介"
-                                                maxlength="2000"
-                                                show-word-limit
-                                                :disabled="templateLoading"
-                                            />
+                                            <div class="ai-field-block">
+                                                <el-input
+                                                    v-model="currentForm.desc"
+                                                    type="textarea"
+                                                    :rows="6"
+                                                    placeholder="请输入视频简介"
+                                                    maxlength="2000"
+                                                    show-word-limit
+                                                    :disabled="templateLoading"
+                                                />
+                                                <div class="ai-inline-actions">
+                                                    <el-button
+                                                        size="small"
+                                                        :loading="aiWorking.desc"
+                                                        :disabled="templateLoading"
+                                                        @click="runAIDesc()"
+                                                    >
+                                                        AI 压缩简介
+                                                    </el-button>
+                                                </div>
+                                                <div class="form-tip">
+                                                    当前简介单位数：{{ countDescUnits(currentForm.desc || '') }}/{{ currentAIDescLimit }}
+                                                </div>
+                                            </div>
                                         </el-form-item>
 
                                         <el-form-item label="粉丝动态">
@@ -1109,12 +1221,23 @@
                                         </el-form-item>
 
                                         <el-form-item label="加入合集">
-                                            <SeasonView
-                                                v-model="currentForm.season_id"
-                                                v-model:section-id="currentForm.section_id"
-                                                :user-uid="selectedUser?.uid"
-                                                :disabled="templateLoading"
-                                            />
+                                            <div class="season-row">
+                                                <SeasonView
+                                                    v-model="currentForm.season_id"
+                                                    v-model:section-id="currentForm.section_id"
+                                                    :user-uid="selectedUser?.uid"
+                                                    :disabled="templateLoading"
+                                                />
+                                                <el-button
+                                                    type="info"
+                                                    text
+                                                    size="small"
+                                                    @click="refreshSeasonList"
+                                                    :disabled="templateLoading || !selectedUser"
+                                                >
+                                                    刷新合集
+                                                </el-button>
+                                            </div>
                                         </el-form-item>
 
                                         <el-form-item label="音质设置">
@@ -1189,14 +1312,30 @@
                                         </el-form-item>
 
                                         <el-form-item label="可见性">
-                                            <el-checkbox
-                                                v-model="currentForm.is_only_self"
-                                                :true-value="1"
-                                                :false-value="0"
-                                                :disabled="templateLoading"
-                                            >
-                                                仅自己可见
-                                            </el-checkbox>
+                                            <div class="checkbox-group">
+                                                <el-checkbox
+                                                    v-model="currentForm.is_only_self"
+                                                    :true-value="1"
+                                                    :false-value="0"
+                                                    :disabled="templateLoading"
+                                                >
+                                                    仅自己可见
+                                                </el-checkbox>
+                                                <el-checkbox
+                                                    v-model="currentForm.space_hidden"
+                                                    :true-value="1"
+                                                    :false-value="0"
+                                                    :disabled="templateLoading"
+                                                >
+                                                    在个人空间投稿页隐藏
+                                                </el-checkbox>
+                                                <el-checkbox
+                                                    v-model="currentForm.auto_close_after_submit"
+                                                    :disabled="templateLoading"
+                                                >
+                                                    投稿成功自动关闭标签页
+                                                </el-checkbox>
+                                            </div>
                                         </el-form-item>
                                     </div>
                                 </el-collapse-transition>
@@ -1265,19 +1404,146 @@
                         <el-button @click="selectFolderApplyPath">选择模板文件夹</el-button>
                     </div>
                 </el-form-item>
+                <el-form-item v-if="folderApplyVideoOptions.length > 1" label="目标视频">
+                    <el-select
+                        v-model="folderApplySelectedVideoId"
+                        placeholder="请选择要匹配的目标视频"
+                        style="width: 100%"
+                    >
+                        <el-option
+                            v-for="item in folderApplyVideoOptions"
+                            :key="item.value"
+                            :label="item.label"
+                            :value="item.value"
+                        />
+                    </el-select>
+                </el-form-item>
                 <el-form-item label="应用字段">
                     <el-checkbox-group v-model="folderApplyFields">
                         <el-checkbox value="cover">封面</el-checkbox>
-                        <el-checkbox value="desc">简介</el-checkbox>
                         <el-checkbox value="tag">标签</el-checkbox>
                         <el-checkbox value="source">来源</el-checkbox>
                         <el-checkbox value="title">标题</el-checkbox>
                     </el-checkbox-group>
                 </el-form-item>
+                <el-form-item label="简介导入">
+                    <el-radio-group v-model="folderApplyDescMode">
+                        <el-radio value="none">不导入简介</el-radio>
+                        <el-radio value="replace">导入并覆盖简介</el-radio>
+                        <el-radio value="prefix3">导入前三行并前置</el-radio>
+                    </el-radio-group>
+                </el-form-item>
+                <el-form-item v-if="folderApplyFields.includes('title')" label="标题预设">
+                    <div class="form-tip">
+                        这里可以临时修改本次应用的拼接预设，不改全局默认。应用后会写入当前标签页草稿，用户需要时可再点保存模板。
+                    </div>
+                    <el-input
+                        v-model="folderApplyImportTitleFormatTemplate"
+                        type="textarea"
+                        :rows="2"
+                        placeholder="导入标题预设"
+                    />
+                    <div class="form-tip">导入标题预设：`${template_title}` 预设标题，`${date}` 日期，`${month}` 月份，`${original_title}` 原标题，`${clean_title}` 净化标题，`${video_id}` 视频ID，`${uploader_name}` 上传者名称，`${uploader_handle}` 频道ID，`${uploader_credit}` 上传者完整字段，`${tag_list}` 标签列表，`${tag1}` 第1标签，`${tag2}` 第2标签</div>
+                    <div class="template-title-preview" v-loading="folderApplyPreviewLoading">
+                        <div class="template-title-preview-label">导入标题预览</div>
+                        <div class="template-title-preview-value">{{ folderApplyImportTitlePreview || '请选择模板文件夹后预览' }}</div>
+                    </div>
+                    <el-input
+                        v-model="folderApplyAITitleFormatTemplate"
+                        type="textarea"
+                        :rows="2"
+                        placeholder="AI 标题预设"
+                        style="margin-top: 8px"
+                    />
+                    <div class="form-tip">AI 标题预设额外支持 `${translated_title}`，其余变量同上。</div>
+                    <div class="template-title-preview" v-loading="folderApplyPreviewLoading">
+                        <div class="template-title-preview-label">AI 标题拼接预览</div>
+                        <div class="template-title-preview-value">{{ folderApplyAITitleTemplatePreview || '请选择模板文件夹后预览' }}</div>
+                    </div>
+                    <el-radio-group v-model="folderApplyAITitleSource" style="margin-top: 8px">
+                        <el-radio value="clean">AI翻译时使用净化标题</el-radio>
+                        <el-radio value="original">AI翻译时使用原标题</el-radio>
+                    </el-radio-group>
+                </el-form-item>
             </el-form>
             <template #footer>
                 <el-button @click="showFolderApplyDialog = false">取消</el-button>
                 <el-button type="primary" @click="confirmFolderApplyDialog">应用</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="showAIPreviewDialog" title="AI 结果预览" width="680px">
+            <div v-if="aiPreviewMode === 'title'" class="ai-preview-block">
+                <div class="ai-preview-source-list">
+                    <div class="ai-preview-source-item">
+                        <div class="ai-preview-source-head">
+                            <span class="ai-preview-style-name">原标题预览</span>
+                            <el-button text size="small" @click="copyTextValue(aiPreviewOriginalTitle)">复制</el-button>
+                        </div>
+                        <el-input :model-value="aiPreviewOriginalTitle" type="textarea" :rows="2" readonly resize="none" />
+                    </div>
+                    <div class="ai-preview-source-item">
+                        <div class="ai-preview-source-head">
+                            <span class="ai-preview-style-name">净化标题预览</span>
+                            <el-button text size="small" @click="copyTextValue(aiPreviewCleanTitle)">复制</el-button>
+                        </div>
+                        <el-input :model-value="aiPreviewCleanTitle" type="textarea" :rows="2" readonly resize="none" />
+                    </div>
+                </div>
+                <div class="ai-preview-title-list">
+                    <div
+                        v-for="item in aiPreviewTitleOptions"
+                        :key="item.key"
+                        class="ai-preview-title-item"
+                        :class="{
+                            selected: aiPreviewSelectedTitle === item.key,
+                            disabled: item.status !== 'ok'
+                        }"
+                        @click="item.status === 'ok' ? (aiPreviewSelectedTitle = item.key) : null"
+                    >
+                        <div class="ai-preview-title-head">
+                            <span class="ai-preview-style-name">{{ item.styleName }}</span>
+                            <span v-if="item.status === 'error'" class="ai-preview-style-status error">请求失败</span>
+                            <span v-else-if="item.status === 'empty'" class="ai-preview-style-status warning">未生成有效结果</span>
+                        </div>
+                        <el-input
+                            :model-value="item.text"
+                            type="textarea"
+                            :rows="2"
+                            readonly
+                            resize="none"
+                            class="ai-preview-title-readonly"
+                        />
+                        <div v-if="item.error" class="ai-preview-title-error">{{ item.error }}</div>
+                    </div>
+                </div>
+                <el-input
+                    v-model="aiPreviewText"
+                    type="textarea"
+                    :rows="4"
+                    class="ai-preview-title-editor"
+                />
+            </div>
+            <div v-else class="ai-preview-block">
+                <div class="ai-preview-meta" v-if="aiPreviewMode === 'desc'">
+                    原简介单位数：{{ aiPreviewSourceUnits }}，AI 结果单位数：{{ aiPreviewResultUnits }} / {{ currentAIDescLimit }}
+                </div>
+                <el-input
+                    v-model="aiPreviewText"
+                    type="textarea"
+                    :rows="aiPreviewMode === 'desc' ? 14 : 8"
+                />
+            </div>
+            <template #footer>
+                <el-button v-if="aiPreviewMode === 'desc'" @click="rerunAIDesc" :loading="aiWorking.desc">
+                    再次压缩
+                </el-button>
+                <el-button v-if="aiPreviewMode === 'desc'" @click="restoreOriginalDesc">
+                    恢复原简介
+                </el-button>
+                <el-button v-if="aiPreviewMode === 'title'" @click="copyAIPreviewTitle">复制</el-button>
+                <el-button @click="cancelAIPreview">取消</el-button>
+                <el-button type="primary" @click="applyAIPreview">应用</el-button>
             </template>
         </el-dialog>
 
@@ -1374,7 +1640,7 @@ import {
 } from '@element-plus/icons-vue'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
-import { readFile, stat } from '@tauri-apps/plugin-fs'
+import { stat } from '@tauri-apps/plugin-fs'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import LoginView from '../components/LoginView.vue'
@@ -1443,10 +1709,17 @@ interface TemplateEditSession {
 interface FolderApplyOptions {
     title: boolean
     cover: boolean
-    desc: boolean
+    desc?: boolean
+    descMode?: 'none' | 'replace' | 'prefix3'
     tag: boolean
     source: boolean
+    preferredVideoId?: string
+    importTitleFormatTemplate?: string
+    aiTitleFormatTemplate?: string
+    aiTitleSource?: AITitleSource
 }
+
+type AITitleSource = 'clean' | 'original'
 
 // 计算属性
 const loginUsers = computed(() => authStore.loginUsers)
@@ -1468,6 +1741,36 @@ const showNewTemplateDialog = ref(false)
 const showLoginDialog = ref(false)
 const showGlobalConfigDialog = ref(false)
 const showFolderApplyDialog = ref(false)
+const showTemplateTitleSettings = ref(false)
+const aiWorking = ref({ title: false, tag: false, desc: false })
+const currentAIDescLimit = computed(() => Number(getAIConfig().descLimit || 1800))
+const canOpenImportedSourceUrl = computed(() => {
+    const url = (currentForm.value?.imported_source_url || '').trim()
+    return /^https?:\/\//i.test(url)
+})
+const canRunAITitle = computed(() => {
+    if (!currentForm.value) return false
+    return Boolean(
+        (currentForm.value.imported_original_title || '').trim() &&
+            (currentForm.value.imported_clean_title || '').trim()
+    )
+})
+const showAIPreviewDialog = ref(false)
+const aiPreviewMode = ref<'title' | 'tag' | 'desc'>('title')
+const aiPreviewTitleOptions = ref<AITitlePreviewOption[]>([])
+const aiPreviewSelectedTitle = ref('')
+const aiPreviewText = ref('')
+const aiPreviewOriginalTitle = ref('')
+const aiPreviewCleanTitle = ref('')
+const aiPreviewSourceUnits = ref(0)
+const aiPreviewResultUnits = ref(0)
+const aiPreviewOriginalDesc = ref('')
+watch(aiPreviewSelectedTitle, value => {
+    if (aiPreviewMode.value === 'title') {
+        const matched = aiPreviewTitleOptions.value.find(item => item.key === value)
+        aiPreviewText.value = matched?.text || ''
+    }
+})
 const loginLoading = ref(false)
 const uploading = ref(false)
 const submitting = ref(false)
@@ -1475,7 +1778,19 @@ const templateLoading = ref(false) // 模板加载状态锁
 const folderApplyUid = ref<number | null>(null)
 const folderApplyTemplateName = ref('')
 const folderApplyPath = ref('')
-const folderApplyFields = ref<string[]>(['cover', 'desc', 'tag', 'source'])
+const folderApplyFields = ref<string[]>(['cover', 'tag', 'source'])
+const folderApplyDescMode = ref<'none' | 'replace' | 'prefix3'>('replace')
+const folderApplySessionId = ref('')
+const folderApplyVideoOptions = ref<Array<{ label: string; value: string }>>([])
+const folderApplySelectedVideoId = ref('')
+const folderApplyImportTitleFormatTemplate = ref('')
+const folderApplyAITitleFormatTemplate = ref('')
+const folderApplyAITitleSource = ref<AITitleSource>('clean')
+const folderApplyPreviewData = ref<ExtractedFolderTemplateData | null>(null)
+const folderApplyPreviewLoading = ref(false)
+const watchOpenToken = ref(0)
+const watchInitialFolder = ref('')
+const appLaunchTs = ref(Math.floor(Date.now() / 1000))
 
 // 视频状态对话框
 const showVideoStatusDialog = ref(false)
@@ -1518,6 +1833,18 @@ watch(
     }
 )
 
+watch(
+    () => [showFolderApplyDialog.value, folderApplyPath.value, folderApplySelectedVideoId.value],
+    ([visible]) => {
+        if (!visible) {
+            folderApplyPreviewData.value = null
+            folderApplyPreviewLoading.value = false
+            return
+        }
+        void refreshFolderApplyPreviewData()
+    }
+)
+
 const TEMPLATE_ORGANIZER_KEY = 'template-organizer-v1'
 const TEMPLATE_COVER_DEFAULT_KEY = 'template-cover-default'
 const FOLDER_COVER_DEFAULT_KEY = 'folder-cover-default'
@@ -1540,7 +1867,7 @@ const moveDialogTemplateFolderId = ref<string | null>(null)
 const moveDialogTargetFolderId = ref<string>('')
 
 let sessionPersistTimer: number | null = null
-const templateCoverSizeValue = ref(48)
+const templateCoverSizeValue = ref(32)
 const draggingTemplate = ref<{
     uid: number
     templateName: string
@@ -1555,8 +1882,8 @@ const getTemplateTabMax = () => {
 
 const getTemplateCoverSize = () => {
     const raw = Number.parseInt(localStorage.getItem(TEMPLATE_COVER_SIZE_KEY) || '', 10)
-    if (!Number.isFinite(raw)) return 48
-    return Math.min(96, Math.max(40, raw))
+    if (!Number.isFinite(raw)) return 32
+    return [32, 48, 64].includes(raw) ? raw : 32
 }
 
 const reloadLocalUiSettings = () => {
@@ -1577,6 +1904,12 @@ const cloneTemplateConfig = (template?: TemplateConfig | null): TemplateConfig =
 
 const touchActiveSession = () => {
     const session = editSessions.value.find(item => item.id === activeSessionId.value)
+    if (!session) return
+    session.updatedAt = Date.now()
+}
+
+const touchSessionById = (sessionId: string) => {
+    const session = editSessions.value.find(item => item.id === sessionId)
     if (!session) return
     session.updatedAt = Date.now()
 }
@@ -1837,8 +2170,20 @@ const selectFolderCover = async (uid: number, folderId: string) => {
 const DEFAULT_COVER_DIR_KEY = 'default-cover-dir'
 const DEFAULT_VIDEO_DIR_KEY = 'default-video-dir'
 const DEFAULT_VIDEO_PICKER_DIR_KEY = 'default-video-picker-dir'
-const DEFAULT_FOLDER_APPLY_DIR_KEY = 'default-template-content-dir'
+const DEFAULT_FOLDER_APPLY_DIR_KEY = 'default-template-content-dir-apply-existing'
+const FOLDER_APPLY_FIELDS_KEY = 'folder-apply-fields-existing-template'
+const FOLDER_APPLY_DESC_MODE_KEY = 'folder-apply-desc-mode-existing-template'
 const DEFAULT_LOG_EXPORT_DIR_KEY = 'default-log-export-dir'
+const AI_CONFIG_KEY = 'ai-config-v1'
+const AI_CONFIG_VERSION = 8
+type AITitlePreviewOption = {
+    key: string
+    styleName: string
+    text: string
+    status: 'ok' | 'empty' | 'error'
+    error?: string
+}
+type ExtractedFolderTemplateData = Awaited<ReturnType<typeof extractFolderTemplateData>>
 
 const getDefaultCoverDir = () => localStorage.getItem(DEFAULT_COVER_DIR_KEY) || ''
 const setDefaultCoverDir = (path: string) =>
@@ -1852,6 +2197,45 @@ const getDefaultFolderApplyDir = () =>
     localStorage.getItem(DEFAULT_FOLDER_APPLY_DIR_KEY) || ''
 const setDefaultFolderApplyDir = (path: string) =>
     localStorage.setItem(DEFAULT_FOLDER_APPLY_DIR_KEY, path)
+const buildFolderApplyPrefKey = (base: string, uid?: number | null, templateName?: string) => {
+    if (!uid || !templateName) return base
+    return `${base}:${uid}:${templateName}`
+}
+const getFolderApplyFieldsPref = (uid?: number | null, templateName?: string) => {
+    try {
+        const raw =
+            localStorage.getItem(buildFolderApplyPrefKey(FOLDER_APPLY_FIELDS_KEY, uid, templateName)) ||
+            localStorage.getItem(FOLDER_APPLY_FIELDS_KEY)
+        if (!raw) return ['cover', 'tag', 'source']
+        const arr = JSON.parse(raw)
+        if (!Array.isArray(arr)) return ['cover', 'tag', 'source']
+        return arr.filter(v => ['cover', 'tag', 'source', 'title'].includes(String(v)))
+    } catch {
+        return ['cover', 'tag', 'source']
+    }
+}
+const setFolderApplyFieldsPref = (
+    fields: string[],
+    uid?: number | null,
+    templateName?: string
+) => localStorage.setItem(buildFolderApplyPrefKey(FOLDER_APPLY_FIELDS_KEY, uid, templateName), JSON.stringify(fields || []))
+const getFolderApplyDescModePref = (
+    uid?: number | null,
+    templateName?: string
+): 'none' | 'replace' | 'prefix3' => {
+    const raw = (
+        localStorage.getItem(buildFolderApplyPrefKey(FOLDER_APPLY_DESC_MODE_KEY, uid, templateName)) ||
+        localStorage.getItem(FOLDER_APPLY_DESC_MODE_KEY) ||
+        ''
+    ).trim()
+    if (raw === 'none' || raw === 'replace' || raw === 'prefix3') return raw
+    return 'replace'
+}
+const setFolderApplyDescModePref = (
+    mode: 'none' | 'replace' | 'prefix3',
+    uid?: number | null,
+    templateName?: string
+) => localStorage.setItem(buildFolderApplyPrefKey(FOLDER_APPLY_DESC_MODE_KEY, uid, templateName), mode)
 const getDefaultLogExportDir = () => localStorage.getItem(DEFAULT_LOG_EXPORT_DIR_KEY) || ''
 const setDefaultLogExportDir = (path: string) =>
     localStorage.setItem(DEFAULT_LOG_EXPORT_DIR_KEY, path)
@@ -1895,26 +2279,12 @@ const guessMimeType = (filePath: string) => {
 }
 
 const toDataUrlFromPath = async (filePath: string) => {
-    const bytes = await readFile(filePath)
-    let binary = ''
-    const chunkSize = 0x8000
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.slice(i, i + chunkSize)
-        binary += String.fromCharCode(...chunk)
-    }
-    const base64 = btoa(binary)
+    const base64 = await utilsStore.readFileBase64(filePath)
     return `data:${guessMimeType(filePath)};base64,${base64}`
 }
 
 const decodeTextFile = async (filePath: string) => {
-    const bytes = await readFile(filePath)
-    try {
-        return new TextDecoder('utf-8').decode(bytes)
-    } catch {
-        let binary = ''
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-        return decodeURIComponent(escape(binary))
-    }
+    return await utilsStore.readTextFile(filePath)
 }
 
 const normalizeTagText = (text: string) => {
@@ -1925,14 +2295,28 @@ const normalizeTagText = (text: string) => {
         .join(',')
 }
 
-const withHomepageSourceLine = (desc: string | undefined, source: string | undefined) => {
-    const cleanSource = (source || '').trim()
-    if (!cleanSource) return (desc || '').trim()
-    const line = `主页链接：${cleanSource}`
-    const body = (desc || '').trim()
-    if (!body) return line
-    if (body.includes(line)) return body
-    return `${line}\n\n${body}`
+const mergeTagLists = (...groups: string[]) => {
+    const out: string[] = []
+    const seen = new Set<string>()
+    groups
+        .flatMap(group => normalizeTagText(group).split(','))
+        .map(v => normalizeTagToken(v))
+        .filter(Boolean)
+        .forEach(tag => {
+            const key = tag.toLowerCase()
+            if (seen.has(key)) return
+            seen.add(key)
+            out.push(tag)
+        })
+    return out.join(',')
+}
+
+const normalizeImportedSourceUrl = (rawValue: string) => {
+    const raw = (rawValue || '').trim().replace(/^主页链接[:：]\s*/i, '')
+    if (!raw) return ''
+    const id = raw.match(/[?&]v=([0-9A-Za-z_-]{11})/)?.[1] || raw.match(/youtu\.be\/([0-9A-Za-z_-]{11})/)?.[1] || raw.match(/\/live\/([0-9A-Za-z_-]{11})/)?.[1]
+    if (id) return `https://youtu.be/${id}`
+    return raw
 }
 
 const inferTitleFromFileName = (name: string) => {
@@ -1941,7 +2325,419 @@ const inferTitleFromFileName = (name: string) => {
     return (m?.[1] || pure || '').trim()
 }
 
-const extractFolderTemplateData = async (folderPath: string) => {
+const extractDateFromFileName = (name: string) => {
+    const pure = name.replace(/\.[^.]+$/, '')
+    return pure.match(/^\[([0-9]{4}-[0-9]{2}-[0-9]{2})\]/)?.[1] || ''
+}
+
+const extractDateFromDescText = (text: string) => {
+    for (const line of (text || '').split(/\r?\n/)) {
+        const trimmed = line.trim()
+        const match = trimmed.match(
+            /^(?:直播开始时间|直播開始時間|视频发布时间|視頻發布時間|publish\s*time)\s*[:：]\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/
+        )
+        if (match) return match[1].trim()
+    }
+    return ''
+}
+
+const extractOriginalTitleFromDescText = (text: string) => {
+    for (const line of (text || '').split(/\r?\n/)) {
+        const trimmed = line.trim()
+        const match = trimmed.match(/^(?:原标题|原標題|original\s*title)\s*[:：]\s*(.+)$/i)
+        if (match) return match[1].trim()
+    }
+    return ''
+}
+
+const extractUploaderCreditFromDescText = (text: string) => {
+    for (const line of (text || '').split(/\r?\n/)) {
+        const trimmed = line.trim()
+        const match = trimmed.match(/^(?:稿件上传者|上傳者|uploader)\s*[:：]\s*(.+)$/i)
+        if (match) return match[1].trim()
+    }
+    return ''
+}
+
+const splitUploaderCredit = (credit: string) => {
+    const raw = (credit || '').trim()
+    const handleMatch = raw.match(/@([A-Za-z0-9._-]+)/)
+    const handle = handleMatch?.[1] || ''
+    const name = raw.replace(/\s*@([A-Za-z0-9._-]+)/, '').trim()
+    return {
+        uploader_credit: raw,
+        uploader_name: name,
+        uploader_handle: handle
+    }
+}
+
+const extractLastNonEmptyLine = (text: string) => {
+    const lines = (text || '')
+        .split(/\r?\n/)
+        .map(v => v.trim())
+        .filter(Boolean)
+    return lines[lines.length - 1] || ''
+}
+
+const splitTagCandidates = (text: string, fallbackToRaw = false) => {
+    const raw = (text || '').trim().replace(/＃/g, '#')
+    if (!raw) return []
+    const bucket = [...Array.from(raw.matchAll(/#([^\s#【】\[\]（）()「」『』]+)/g)).map(m => m[1])]
+    const bracketPatterns = [
+        /【([^】]+)】/g,
+        /\[([^\]]+)\]/g,
+        /（([^）]+)）/g,
+        /\(([^)]+)\)/g,
+        /「([^」]+)」/g,
+        /『([^』]+)』/g
+    ]
+    bracketPatterns.forEach(pattern => {
+        bucket.push(...Array.from(raw.matchAll(pattern)).map(m => m[1]))
+    })
+    const source = bucket.length ? bucket : fallbackToRaw ? [raw] : []
+    return source.flatMap(item => item.split(/[\s,，/／|｜&＆·・]+/))
+}
+
+const normalizeTagToken = (token: string) =>
+    (token || '')
+        .trim()
+        .replace(/^[#＃]+/, '')
+        .replace(/^[\[\]【】()（）「」『』<>《》]+|[\[\]【】()（）「」『』<>《》]+$/g, '')
+        .replace(/^[.,，。!！?？:：;；~～\-_+=]+|[.,，。!！?？:：;；~～\-_+=]+$/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+
+const extractImportedTags = (titleText: string, descText: string, uploaderName: string) => {
+    const uploaderTokens = splitTagCandidates((uploaderName || '').replace(/\s*[_＿]+\s*/g, ' / '), true)
+    const lastLine = extractLastNonEmptyLine(descText)
+    const tokens = [
+        ...uploaderTokens,
+        ...splitTagCandidates(titleText, false),
+        ...splitTagCandidates(lastLine, true)
+    ]
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const token of tokens) {
+        const normalized = normalizeTagToken(token)
+        const key = normalized.toLowerCase()
+        if (!normalized || normalized.startsWith('http')) continue
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(normalized)
+    }
+    return out
+}
+
+const buildImportedDescPrefix = (descText: string) => {
+    const lines = (descText || '')
+        .split(/\r?\n/)
+        .map(v => v.trim())
+        .filter(Boolean)
+    if (!lines.length) return ''
+    const headCount = lines[0].startsWith('稿件上传者：') ? 4 : 3
+    return lines.slice(0, headCount).join('\n')
+}
+
+const stripImportedTitleTags = (title: string) =>
+    (title || '')
+        .replace(/[【\[(（(][^【\]】)]*[】\])）)]/g, ' ')
+        .replace(/(^|\s)#[^\s#]+/g, ' ')
+        .replace(/\s*[|｜/／·・\-–—_:：]?\s*[12]\d{3}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?\s*$/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+
+const resolveTemplateTitleSeed = (
+    savedSeed: string,
+    preferredTitle: string,
+    fallbackTemplateName: string,
+    rawImportedTitle = ''
+) => {
+    const stored = (savedSeed || '').trim()
+    if (stored) return stored
+    const preferred = (preferredTitle || '').trim()
+    const fallback = (fallbackTemplateName || '').trim()
+    if (!preferred) return fallback
+
+    const raw = (rawImportedTitle || '').trim()
+    const normalizedPreferred = preferred.replace(/\s+/g, '')
+    const normalizedRaw = raw.replace(/\s+/g, '')
+    const looksLikeImported =
+        /\d{4}-\d{2}-\d{2}/.test(preferred) ||
+        (normalizedRaw && normalizedPreferred.includes(normalizedRaw.slice(0, Math.min(12, normalizedRaw.length)))) ||
+        preferred.length > 40
+
+    if (looksLikeImported && fallback) return fallback
+    return preferred
+}
+
+const getAIConfig = () => {
+    const defaults = {
+        apiBase: 'https://api.deepseek.com',
+        apiKey: '',
+        model: 'deepseek-chat',
+        descLimit: 1800,
+        defaultImportTags: '翻唱',
+        importTitleFormatTemplate: '${template_title}[${date}]${clean_title}',
+        aiTitleFormatTemplate: '${template_title}[${date}]${translated_title}',
+    titleStyleName1: '简洁直译',
+    titleStyleName2: '吸睛标题',
+    titleStyleName3: '极简封面',
+    titleRuleNotes:
+        '不要输出任何 #标签；保留原文 emoji；「歌枠」优先译为「歌回」；人名、频道名不要翻译；AI 只负责当前选中的标题源正文，不负责日期和视频 ID。',
+    titlePrompt1:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为简洁直译版，结构尽量贴近原文；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    titlePrompt2:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为短视频吸睛标题风，节奏更明快；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    titlePrompt3:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为极简封面版，精炼紧凑，适合封面小字；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+        tagRuleNotes:
+            '不要翻译现有标签；不要新增泛标签；仅允许以下特例：shorts -> 竖屏，歌枠 -> 歌回,歌枠；删除 新人Vtuber；保留人名、频道名、企划名与原文大小写。',
+        tagPrompt:
+            '请将以下标签整理为适合 B 站投稿的标签列表。\n要求：\n1. 不要翻译现有标签，不要把日文或英文改成中文；\n2. 不要新增「音乐」「虚拟主播」「直播」这类泛标签；\n3. 只允许在原标签基础上做删减、去重、大小写纠正，以及命中特例规则；\n4. 输出 1 行，使用英文逗号分隔；\n5. 最多输出 12 个标签；\n6. 不要解释。\n附加规则：{{tag_rules}}\n当前标签：{{tags}}\n原标题：{{original_title}}\n简介最后一行：{{last_line}}',
+        descRuleNotes:
+            '尽量缩减换行和多余空格；不要翻译；尽量不改变原简介；优先删掉不重要段落。',
+        descPrompt:
+            '请压缩下面的投稿简介，使其更适合 B 站投稿。\n要求：\n1. 输出纯文本，不加解释；\n2. 保留开头的元信息行；\n3. 目标上限：{{limit}}。\n附加规则：{{desc_rules}}\n简介原文：\n{{desc}}'
+    }
+    try {
+        const raw = localStorage.getItem(AI_CONFIG_KEY)
+        if (!raw) return defaults
+        const parsed = (JSON.parse(raw) || {}) as Record<string, any>
+        const version = Number(parsed._version || 0)
+        if (version < AI_CONFIG_VERSION) {
+            return {
+                ...defaults,
+                apiBase: String(parsed.apiBase || defaults.apiBase),
+                apiKey: String(parsed.apiKey || defaults.apiKey),
+                model: String(parsed.model || defaults.model),
+                descLimit: Number(parsed.descLimit || defaults.descLimit),
+                defaultImportTags: String(parsed.defaultImportTags || defaults.defaultImportTags)
+            }
+        }
+        const merged = { ...defaults, ...parsed } as Record<string, any>
+        const defaultMap = defaults as Record<string, string | number>
+        ;[
+            'importTitleFormatTemplate',
+            'aiTitleFormatTemplate',
+            'titleRuleNotes',
+            'titlePrompt1',
+            'titlePrompt2',
+            'titlePrompt3',
+            'tagRuleNotes',
+            'tagPrompt',
+            'descRuleNotes',
+            'descPrompt'
+        ].forEach(key => {
+            if (!String(merged[key] ?? '').trim()) {
+                merged[key] = defaultMap[key]
+            }
+        })
+        return merged
+    } catch {
+        return defaults
+    }
+}
+
+const buildAIEndpoint = (apiBase: string) => {
+    const base = (apiBase || '').trim().replace(/\/+$/, '')
+    if (!base) return ''
+    return /\/chat\/completions$/i.test(base) ? base : `${base}/chat/completions`
+}
+
+const fillPromptTemplate = (template: string, vars: Record<string, string | number>) => {
+    let output = template || ''
+    Object.entries(vars).forEach(([key, value]) => {
+        output = output.split(`{{${key}}}`).join(String(value ?? ''))
+    })
+    return output
+}
+
+const fillDollarTemplate = (template: string, vars: Record<string, string | number>) => {
+    let output = template || ''
+    Object.entries(vars).forEach(([key, value]) => {
+        output = output.split(`\${${key}}`).join(String(value ?? ''))
+    })
+    return output
+}
+
+const formatImportedTitle = (template: string, vars: Record<string, string | number>) => {
+    let output = fillDollarTemplate(template, vars)
+    output = output.replace(/\[\s*月\]/g, '')
+    output = output.replace(/特征码\[\s*\]/g, '')
+    output = output.replace(/\[\s*\]/g, '')
+    output = output.replace(/\s{2,}/g, ' ').trim()
+    return output
+}
+
+const countDescUnits = (text: string) =>
+    Array.from(text || '').reduce((sum, ch) => sum + (ch.charCodeAt(0) < 128 ? 1 : 2), 0)
+
+const extractAILines = (text: string, limit = 3) =>
+    (text || '')
+        .split(/\r?\n/)
+        .map(v => v.trim())
+        .filter(Boolean)
+        .map(v => v.replace(/^[0-9]+[.)、]\s*/, ''))
+        .filter(Boolean)
+        .slice(0, limit)
+
+const sanitizeAITitleCandidate = (text: string, fallback = '') => {
+    let value = (text || '').trim()
+    value = value.replace(/^\[[0-9]{4}-[0-9]{2}-[0-9]{2}\]\s*/g, '')
+    value = value.replace(/^\[[0-9]{2}月\]\s*/g, '')
+    value = value.replace(/\[[0-9A-Za-z_-]{11}\]\s*$/g, '')
+    value = value.replace(/(^|\s)#[^\s#]+/g, ' ')
+    value = value.replace(/^[【\[(（(]\s*#?[^\]】)）]+[】\])）)]\s*/g, '')
+    value = value.replace(/\s*[【\[(（(]\s*#?[^\]】)）]+[】\])）)]$/g, '')
+    value = value.replace(/[、,，]\s*$/g, '')
+    value = value.replace(/\s{2,}/g, ' ').trim()
+    return value || fallback.trim()
+}
+
+const stripAITitleTemplateArtifacts = (
+    text: string,
+    context: { template_title?: string; date?: string; clean_title?: string }
+) => {
+    let value = (text || '').trim()
+    const templateTitle = (context.template_title || '').trim()
+    const templateTail = templateTitle
+        .replace(/^[【\[(（][^】\])）]*[】\])）]\s*/g, '')
+        .trim()
+    const dateText = (context.date || '').trim()
+
+    if (dateText) {
+        const escapedDate = dateText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        value = value.replace(new RegExp(`\\[${escapedDate}\\]`, 'g'), ' ')
+        value = value.replace(new RegExp(escapedDate, 'g'), ' ')
+    }
+    if (templateTitle) {
+        const escapedTemplate = templateTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        value = value.replace(new RegExp(`^${escapedTemplate}\\s*`, 'i'), '')
+    }
+    if (templateTail) {
+        const escapedTail = templateTail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        value = value.replace(new RegExp(`^${escapedTail}\\s*`, 'i'), '')
+        value = value.replace(new RegExp(`^${escapedTail}\\s*[|｜/／·・\\-–—_:：]?\\s*`, 'i'), '')
+    }
+    value = value.replace(/\s{2,}/g, ' ').trim()
+    return value
+}
+
+const optimizeAICleanTitleCandidate = (
+    text: string,
+    fallback = '',
+    context: { template_title?: string; date?: string; clean_title?: string } = {}
+) => {
+    const stripped = stripAITitleTemplateArtifacts(stripImportedTitleTags(text || ''), context)
+    return sanitizeAITitleCandidate(stripped, fallback)
+}
+
+const canonicalizeAITagOutput = (rawResult: string, currentTags: string, defaultImportTags = '') => {
+    const baseTokens = mergeTagLists(currentTags || '', defaultImportTags || '')
+        .split(',')
+        .map(v => normalizeTagToken(v))
+        .filter(Boolean)
+    const canonicalByLower = new Map<string, string>()
+    baseTokens.forEach(tag => canonicalByLower.set(tag.toLowerCase(), tag))
+    const allowedExtra = new Map<string, string>([
+        ['竖屏', '竖屏'],
+        ['歌回', '歌回'],
+        ['歌枠', '歌枠']
+    ])
+    const blocked = new Set(['音乐', '虚拟主播', '直播', '新人vtuber'])
+    const out: string[] = []
+    const seen = new Set<string>()
+    normalizeTagText(rawResult)
+        .split(',')
+        .map(v => normalizeTagToken(v))
+        .filter(Boolean)
+        .forEach(tag => {
+            const key = tag.toLowerCase()
+            if (blocked.has(key)) return
+            let finalTag = canonicalByLower.get(key) || allowedExtra.get(tag) || ''
+            if (!finalTag) {
+                if (key === 'shorts') finalTag = '竖屏'
+                else if (tag === '歌枠') finalTag = '歌枠'
+                else if (tag === '歌回') finalTag = '歌回'
+            }
+            if (!finalTag) return
+            const finalKey = finalTag.toLowerCase()
+            if (seen.has(finalKey)) return
+            seen.add(finalKey)
+            out.push(finalTag)
+        })
+    return out.slice(0, 12).join(',')
+}
+
+const buildTagTemplateVars = (tagText: string) => {
+    const tags = normalizeTagText(tagText)
+        .split(',')
+        .map(v => normalizeTagToken(v))
+        .filter(Boolean)
+    return {
+        tag_list: tags.join(','),
+        tag1: tags[0] || '',
+        tag2: tags[1] || ''
+    }
+}
+
+const getEffectiveImportTitleTemplate = (template?: Partial<TemplateConfig> | null) =>
+    (template?.import_title_format_template || '').trim() || getAIConfig().importTitleFormatTemplate
+
+const getEffectiveAITitleTemplate = (template?: Partial<TemplateConfig> | null) =>
+    (template?.ai_title_format_template || '').trim() || getAIConfig().aiTitleFormatTemplate
+
+const getEffectiveAITitleSource = (template?: Partial<TemplateConfig> | null): AITitleSource =>
+    template?.ai_title_source === 'original' ? 'original' : 'clean'
+
+const requestAIText = async (prompt: string) => {
+    const cfg = getAIConfig()
+    if (!cfg.apiKey?.trim()) {
+        throw new Error('请先在全局设置中填写 AI API Key')
+    }
+    const endpoint = buildAIEndpoint(cfg.apiBase)
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cfg.apiKey.trim()}`
+        },
+        body: JSON.stringify({
+            model: cfg.model || 'deepseek-chat',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.7
+        })
+    })
+    if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`AI 请求失败: ${response.status} ${text.slice(0, 200)}`)
+    }
+    const data = await response.json()
+    const content = data?.choices?.[0]?.message?.content
+    if (!content) {
+        throw new Error('AI 未返回有效内容')
+    }
+    return String(content).trim()
+}
+
+const requestAITextIfEnabled = async (prompt: string) => {
+    const cfg = getAIConfig()
+    if (!cfg.apiKey?.trim()) return ''
+    return await requestAIText(prompt)
+}
+
+const extractVideoIdFromText = (text: string) => {
+    const raw = text || ''
+    return (
+        raw.match(/\[([0-9A-Za-z_-]{11})\]/)?.[1] ||
+        raw.match(/(?:^|[_\-\s])([0-9A-Za-z_-]{11})(?:[_\-\s]|\.)/)?.[1] ||
+        raw.match(/[?&]v=([0-9A-Za-z_-]{11})/)?.[1] ||
+        raw.match(/youtu\.be\/([0-9A-Za-z_-]{11})/)?.[1] ||
+        ''
+    )
+}
+
+const extractFolderTemplateData = async (folderPath: string, preferredVideoId = '') => {
     const entries = await utilsStore.readDirRecursive(folderPath, false, 2)
     const files = entries.filter(item => !item.is_directory)
     const byName = new Map<string, string>()
@@ -1956,35 +2752,75 @@ const extractFolderTemplateData = async (folderPath: string) => {
     }
 
     const textPathTitle = findFirst(['title.txt', '标题.txt'])
+    const descCandidates = files.filter(f =>
+        /(?:^|[_\-\s])(description|desc|描述|简介)(?:[_\-\s]|\.)/i.test(f.name) &&
+        /\.(txt|md|description)$/i.test(f.name)
+    )
     const textPathDesc = findFirst([
         'description.txt',
         'desc.txt',
+        '描述.txt',
         '简介.txt',
         '简介.description',
         '.description'
-    ]) || files.find(f => /\.description$/i.test(f.name))?.path || ''
+    ]) ||
+        (preferredVideoId
+            ? descCandidates.find(f => (extractVideoIdFromText(f.name) || '') === preferredVideoId)?.path
+            : '') ||
+        descCandidates?.[0]?.path ||
+        files.find(f => /\.description$/i.test(f.name))?.path ||
+        ''
     const textPathTag = findFirst(['tags.txt', 'tag.txt', '标签.txt'])
     const looseTagPath =
         files.find(f => /(?:^|[_\-\s])(tags?|标签)(?:[_\-\s]|\.)/i.test(f.name) && /\.(txt|csv)$/i.test(f.name))
             ?.path || ''
     const tagPath = textPathTag || looseTagPath
+    const urlCandidates = files.filter(f => /\.url$/i.test(f.name))
     const textPathUrl =
-        files.find(f => /\.url$/i.test(f.name))?.path || findFirst(['source.txt', '来源.txt'])
+        (preferredVideoId
+            ? urlCandidates.find(f => (extractVideoIdFromText(f.name) || '') === preferredVideoId)?.path
+            : '') ||
+        urlCandidates?.[0]?.path ||
+        findFirst(['source.txt', '来源.txt'])
+    const imageCandidates = files.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name))
     const coverPath =
+        (preferredVideoId
+            ? imageCandidates.find(f => (extractVideoIdFromText(f.name) || '') === preferredVideoId)?.path
+            : '') ||
         findFirst(['cover.png', 'cover.jpg', 'cover.jpeg', 'thumbnail.png', 'thumbnail.jpg']) ||
-        files.find(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name))?.path ||
+        imageCandidates?.[0]?.path ||
         ''
 
-    const mp4Path = files.find(f => /\.(mp4|mkv|mov|flv|webm)$/i.test(f.name))?.path || ''
+    const mp4Path =
+        (preferredVideoId
+            ? files.find(
+                  f =>
+                      /\.(mp4|mkv|mov|flv|webm)$/i.test(f.name) &&
+                      (extractVideoIdFromText(f.name) || '') === preferredVideoId
+              )?.path
+            : '') ||
+        files.find(f => /\.(mp4|mkv|mov|flv|webm)$/i.test(f.name))?.path ||
+        ''
     const mp4Name = files.find(f => f.path === mp4Path)?.name || ''
 
     const out: {
         title?: string
+        rawTitle?: string
         desc?: string
         tag?: string
         source?: string
         coverPath?: string
+        videoId?: string
+        date?: string
+        month?: string
+        uploaderCredit?: string
+        uploaderName?: string
+        uploaderHandle?: string
     } = {}
+
+    if (mp4Name) {
+        out.videoId = extractVideoIdFromText(mp4Name) || undefined
+    }
 
     if (textPathTitle) {
         out.title = (await decodeTextFile(textPathTitle)).trim()
@@ -1994,12 +2830,36 @@ const extractFolderTemplateData = async (folderPath: string) => {
 
     if (textPathDesc) {
         out.desc = (await decodeTextFile(textPathDesc)).trim()
+        if (!out.rawTitle) {
+            out.rawTitle = extractOriginalTitleFromDescText(out.desc)
+        }
+        const uploaderMeta = splitUploaderCredit(extractUploaderCreditFromDescText(out.desc))
+        out.uploaderCredit = uploaderMeta.uploader_credit || undefined
+        out.uploaderName = uploaderMeta.uploader_name || undefined
+        out.uploaderHandle = uploaderMeta.uploader_handle || undefined
     }
+    const dateText =
+        extractDateFromFileName(mp4Name) ||
+        extractDateFromFileName(files.find(f => f.path === textPathUrl)?.name || '') ||
+        extractDateFromFileName(files.find(f => f.path === coverPath)?.name || '') ||
+        extractDateFromDescText(out.desc || '')
+    if (dateText) {
+        out.date = dateText
+        out.month = dateText.slice(5, 7)
+    }
+    if (!textPathTitle && out.rawTitle) {
+        out.title = out.rawTitle
+    }
+    if (!out.rawTitle) out.rawTitle = out.title
     if (tagPath) {
         out.tag = normalizeTagText(await decodeTextFile(tagPath))
     } else {
         const uploaderName = folderPath.split(/[/\\]/).filter(Boolean).pop() || ''
-        if (uploaderName) {
+        const rawTitle = out.rawTitle || out.title || ''
+        const importedTags = extractImportedTags(rawTitle, out.desc || '', uploaderName)
+        if (importedTags.length) {
+            out.tag = importedTags.join(',')
+        } else if (uploaderName) {
             out.tag = Array.from(
                 new Set([uploaderName, '虚拟主播', 'vsinger', 'vtuber', '直播', '翻唱'])
             ).join(',')
@@ -2008,7 +2868,7 @@ const extractFolderTemplateData = async (folderPath: string) => {
     if (textPathUrl) {
         const raw = (await decodeTextFile(textPathUrl)).trim()
         const m = raw.match(/URL\s*=\s*(https?:\/\/\S+)/i)
-        out.source = (m?.[1] || raw).trim()
+        out.source = normalizeImportedSourceUrl((m?.[1] || raw).trim())
     }
     if (coverPath) {
         out.coverPath = coverPath
@@ -2017,37 +2877,675 @@ const extractFolderTemplateData = async (folderPath: string) => {
     return out
 }
 
+const getCurrentDraftPreferredVideoId = () => {
+    const session = editSessions.value.find(item => item.id === activeSessionId.value)
+    const videos = session?.draft?.videos || []
+    return (
+        videos
+            .map(v => extractVideoIdFromText(String(v?.filename || v?.path || v?.title || '')))
+            .find(Boolean) || ''
+    )
+}
+
+const getCurrentAIContext = () => {
+    const cfg = getAIConfig()
+    const desc = currentForm.value?.desc || ''
+    const originalTitle =
+        currentForm.value?.imported_original_title ||
+        extractOriginalTitleFromDescText(desc) ||
+        currentForm.value?.title ||
+        ''
+    const templateTitle = resolveTemplateTitleSeed(
+        currentForm.value?.template_title_seed || '',
+        currentForm.value?.title || '',
+        currentTemplateName.value || '',
+        originalTitle
+    )
+    const cleanTitle = currentForm.value?.imported_clean_title || stripImportedTitleTags(originalTitle)
+    const aiTitleSource = getEffectiveAITitleSource(currentForm.value)
+    const aiSourceTitle = aiTitleSource === 'original' ? originalTitle : cleanTitle
+    const videoId = getCurrentDraftPreferredVideoId()
+    const firstVideoName = currentForm.value?.videos?.[0]?.filename || currentForm.value?.videos?.[0]?.path || ''
+    const dateText =
+        currentForm.value?.imported_date ||
+        extractDateFromFileName(String(firstVideoName)) ||
+        extractDateFromDescText(desc)
+    const month = dateText ? `${Number(dateText.slice(5, 7))}`.padStart(2, '0') : ''
+    const lastLine = extractLastNonEmptyLine(desc)
+    const uploaderMeta = splitUploaderCredit(extractUploaderCreditFromDescText(desc))
+    const tagVars = buildTagTemplateVars(tags.value.join(','))
+    const formattedTitle = formatImportedTitle(getEffectiveAITitleTemplate(currentForm.value) || '', {
+        template_title: templateTitle,
+        original_title: originalTitle,
+        clean_title: cleanTitle,
+        translated_title: aiSourceTitle,
+        date: dateText,
+        month,
+        video_id: videoId,
+        uploader_name: uploaderMeta.uploader_name,
+        uploader_handle: uploaderMeta.uploader_handle,
+        uploader_credit: uploaderMeta.uploader_credit,
+        tag_list: tagVars.tag_list,
+        tag1: tagVars.tag1,
+        tag2: tagVars.tag2
+    })
+    return {
+        template_title: templateTitle,
+        original_title: originalTitle,
+        clean_title: cleanTitle,
+        ai_title_source: aiTitleSource,
+        ai_source_title: aiSourceTitle,
+        date: dateText,
+        month,
+        video_id: videoId,
+        translated_title: aiSourceTitle,
+        uploader_name: uploaderMeta.uploader_name,
+        uploader_handle: uploaderMeta.uploader_handle,
+        uploader_credit: uploaderMeta.uploader_credit,
+        tag_list: tagVars.tag_list,
+        tag1: tagVars.tag1,
+        tag2: tagVars.tag2,
+        formatted_title: formattedTitle,
+        title_rules: cfg.titleRuleNotes || '',
+        tags: tags.value.join(','),
+        tag_rules: cfg.tagRuleNotes || '',
+        last_line: lastLine,
+        desc,
+        desc_rules: cfg.descRuleNotes || '',
+        limit: String(cfg.descLimit || 1800)
+    }
+}
+
+const buildTitleTemplateVars = (params: {
+    templateTitle: string
+    originalTitle: string
+    cleanTitle: string
+    translatedTitle: string
+    date: string
+    month: string
+    videoId: string
+    uploaderName: string
+    uploaderHandle: string
+    uploaderCredit: string
+    tagText: string
+}) => {
+    const tagVars = buildTagTemplateVars(params.tagText)
+    return {
+        template_title: params.templateTitle,
+        original_title: params.originalTitle,
+        clean_title: params.cleanTitle,
+        translated_title: params.translatedTitle,
+        date: params.date,
+        month: params.month,
+        video_id: params.videoId,
+        uploader_name: params.uploaderName,
+        uploader_handle: params.uploaderHandle,
+        uploader_credit: params.uploaderCredit,
+        tag_list: tagVars.tag_list,
+        tag1: tagVars.tag1,
+        tag2: tagVars.tag2
+    }
+}
+
+const currentImportTitlePreview = computed(() => {
+    if (!currentForm.value) return ''
+    const context = getCurrentAIContext()
+    return formatImportedTitle(
+        getEffectiveImportTitleTemplate(currentForm.value),
+        buildTitleTemplateVars({
+            templateTitle: context.template_title,
+            originalTitle: context.original_title,
+            cleanTitle: context.clean_title,
+            translatedTitle: context.clean_title,
+            date: context.date,
+            month: context.month,
+            videoId: context.video_id,
+            uploaderName: context.uploader_name,
+            uploaderHandle: context.uploader_handle,
+            uploaderCredit: context.uploader_credit,
+            tagText: context.tags
+        })
+    ).trim()
+})
+
+const openImportedSourceUrl = async () => {
+    const url = (currentForm.value?.imported_source_url || '').trim()
+    if (!/^https?:\/\//i.test(url)) {
+        utilsStore.showMessage('当前标签页没有可打开的原视频链接', 'warning')
+        return
+    }
+    try {
+        await openUrl(url)
+    } catch (error) {
+        console.error('打开原视频链接失败:', error)
+        utilsStore.showMessage(`打开原视频链接失败: ${error}`, 'error')
+    }
+}
+
+const currentAITitleTemplatePreview = computed(() => {
+    if (!currentForm.value) return ''
+    const context = getCurrentAIContext()
+    return formatImportedTitle(
+        getEffectiveAITitleTemplate(currentForm.value),
+        buildTitleTemplateVars({
+            templateTitle: context.template_title,
+            originalTitle: context.original_title,
+            cleanTitle: context.clean_title,
+            translatedTitle: '（AI翻译结果）',
+            date: context.date,
+            month: context.month,
+            videoId: context.video_id,
+            uploaderName: context.uploader_name,
+            uploaderHandle: context.uploader_handle,
+            uploaderCredit: context.uploader_credit,
+            tagText: context.tags
+        })
+    ).trim()
+})
+
+const refreshFolderApplyPreviewData = async () => {
+    if (!showFolderApplyDialog.value || !folderApplyPath.value) {
+        folderApplyPreviewData.value = null
+        return
+    }
+    folderApplyPreviewLoading.value = true
+    try {
+        folderApplyPreviewData.value = await extractFolderTemplateData(
+            folderApplyPath.value,
+            folderApplySelectedVideoId.value || ''
+        )
+    } catch (error) {
+        console.error('加载模板文件夹预览失败:', error)
+        folderApplyPreviewData.value = null
+    } finally {
+        folderApplyPreviewLoading.value = false
+    }
+}
+
+const folderApplyImportTitlePreview = computed(() => {
+    const extracted = folderApplyPreviewData.value
+    if (!extracted) return ''
+    const originalTitle = extracted.rawTitle || extracted.title || ''
+    const cleanTitle = stripImportedTitleTags(originalTitle)
+    const templateTitle = resolveTemplateTitleSeed(
+        currentForm.value?.template_title_seed || '',
+        currentForm.value?.title || '',
+        folderApplyTemplateName.value || currentTemplateName.value || '',
+        originalTitle
+    )
+    return formatImportedTitle(
+        folderApplyImportTitleFormatTemplate.value.trim() ||
+            getEffectiveImportTitleTemplate(currentForm.value),
+        buildTitleTemplateVars({
+            templateTitle,
+            originalTitle,
+            cleanTitle,
+            translatedTitle: cleanTitle,
+            date: extracted.date || '',
+            month: extracted.month || '',
+            videoId: extracted.videoId || '',
+            uploaderName: extracted.uploaderName || '',
+            uploaderHandle: extracted.uploaderHandle || '',
+            uploaderCredit: extracted.uploaderCredit || '',
+            tagText: extracted.tag || ''
+        })
+    ).trim()
+})
+
+const folderApplyAITitleTemplatePreview = computed(() => {
+    const extracted = folderApplyPreviewData.value
+    if (!extracted) return ''
+    const originalTitle = extracted.rawTitle || extracted.title || ''
+    const cleanTitle = stripImportedTitleTags(originalTitle)
+    const templateTitle = resolveTemplateTitleSeed(
+        currentForm.value?.template_title_seed || '',
+        currentForm.value?.title || '',
+        folderApplyTemplateName.value || currentTemplateName.value || '',
+        originalTitle
+    )
+    return formatImportedTitle(
+        folderApplyAITitleFormatTemplate.value.trim() || getEffectiveAITitleTemplate(currentForm.value),
+        buildTitleTemplateVars({
+            templateTitle,
+            originalTitle,
+            cleanTitle,
+            translatedTitle: '（AI翻译结果）',
+            date: extracted.date || '',
+            month: extracted.month || '',
+            videoId: extracted.videoId || '',
+            uploaderName: extracted.uploaderName || '',
+            uploaderHandle: extracted.uploaderHandle || '',
+            uploaderCredit: extracted.uploaderCredit || '',
+            tagText: extracted.tag || ''
+        })
+    ).trim()
+})
+
+const runAITitle = async () => {
+    if (!currentForm.value) return
+    if (!canRunAITitle.value) {
+        utilsStore.showMessage('请先通过“选择模板文件夹”导入标题源字段，再使用 AI 标题', 'warning')
+        return
+    }
+    const cfg = getAIConfig()
+    const promptConfigs = [
+        { styleName: (cfg.titleStyleName1 || '风格1').trim(), prompt: cfg.titlePrompt1 || '' },
+        { styleName: (cfg.titleStyleName2 || '风格2').trim(), prompt: cfg.titlePrompt2 || '' },
+        { styleName: (cfg.titleStyleName3 || '风格3').trim(), prompt: cfg.titlePrompt3 || '' }
+    ]
+    if (!promptConfigs.some(item => item.prompt.trim())) {
+        utilsStore.showMessage('请先在全局设置中填写标题提示词', 'warning')
+        return
+    }
+    aiWorking.value.title = true
+    try {
+        const context = getCurrentAIContext()
+        const aiPromptContext = {
+            ai_title_source: context.ai_title_source,
+            ai_source_title: context.ai_source_title,
+            title_rules: context.title_rules
+        }
+        const template = getEffectiveAITitleTemplate(currentForm.value)
+        const results = await Promise.all(
+            promptConfigs.map(async (item, index): Promise<AITitlePreviewOption> => {
+                const key = `style-${index + 1}`
+                if (!item.prompt.trim()) {
+                    return {
+                        key,
+                        styleName: item.styleName || `风格${index + 1}`,
+                        text: '',
+                        status: 'empty',
+                        error: '未配置提示词'
+                    }
+                }
+                try {
+                    const result = await requestAIText(fillPromptTemplate(item.prompt, aiPromptContext))
+                    const candidate = optimizeAICleanTitleCandidate(
+                        extractAILines(result, 1)[0] || '',
+                        context.clean_title,
+                        context
+                    ).trim()
+                    if (!candidate) {
+                        return {
+                            key,
+                            styleName: item.styleName || `风格${index + 1}`,
+                            text: '',
+                            status: 'empty',
+                            error: '模型未返回有效正文'
+                        }
+                    }
+                    const formatted = formatImportedTitle(template, {
+                        template_title: context.template_title,
+                        original_title: context.original_title,
+                        clean_title: context.clean_title,
+                        translated_title: candidate,
+                        date: context.date,
+                        month: context.month,
+                        video_id: context.video_id,
+                        uploader_name: context.uploader_name,
+                        uploader_handle: context.uploader_handle,
+                        uploader_credit: context.uploader_credit,
+                        tag_list: context.tag_list,
+                        tag1: context.tag1,
+                        tag2: context.tag2
+                    })
+                        .slice(0, 80)
+                        .trim()
+                    if (!formatted) {
+                        return {
+                            key,
+                            styleName: item.styleName || `风格${index + 1}`,
+                            text: '',
+                            status: 'empty',
+                            error: '拼接后为空'
+                        }
+                    }
+                    return {
+                        key,
+                        styleName: item.styleName || `风格${index + 1}`,
+                        text: formatted,
+                        status: 'ok'
+                    }
+                } catch (error) {
+                    return {
+                        key,
+                        styleName: item.styleName || `风格${index + 1}`,
+                        text: '',
+                        status: 'error',
+                        error: String(error)
+                    }
+                }
+            })
+        )
+        const firstValid = results.find(item => item.status === 'ok' && item.text.trim())
+        if (!firstValid) throw new Error('3 个风格都没有生成有效标题')
+        aiPreviewMode.value = 'title'
+        aiPreviewOriginalTitle.value = context.original_title
+        aiPreviewCleanTitle.value = context.clean_title
+        aiPreviewTitleOptions.value = results
+        aiPreviewSelectedTitle.value = firstValid.key
+        aiPreviewText.value = firstValid.text
+        showAIPreviewDialog.value = true
+    } catch (error) {
+        utilsStore.showMessage(`AI 标题生成失败: ${error}`, 'error')
+    } finally {
+        aiWorking.value.title = false
+    }
+}
+
+const runAITag = async () => {
+    if (!currentForm.value) return
+    const cfg = getAIConfig()
+    if (!cfg.tagPrompt?.trim()) {
+        utilsStore.showMessage('请先在全局设置中填写标签提示词', 'warning')
+        return
+    }
+    aiWorking.value.tag = true
+    try {
+        const prompt = fillPromptTemplate(cfg.tagPrompt, getCurrentAIContext())
+        const result = await requestAIText(prompt)
+        aiPreviewMode.value = 'tag'
+        aiPreviewText.value = canonicalizeAITagOutput(result, getCurrentAIContext().tags, cfg.defaultImportTags || '')
+        showAIPreviewDialog.value = true
+    } catch (error) {
+        utilsStore.showMessage(`AI 标签优化失败: ${error}`, 'error')
+    } finally {
+        aiWorking.value.tag = false
+    }
+}
+
+const runAIDesc = async () => {
+    if (!currentForm.value) return
+    const cfg = getAIConfig()
+    if (!cfg.descPrompt?.trim()) {
+        utilsStore.showMessage('请先在全局设置中填写简介提示词', 'warning')
+        return
+    }
+    aiWorking.value.desc = true
+    try {
+        let working = currentForm.value.desc || ''
+        let result = working
+        const limit = Number(cfg.descLimit || 1800)
+        for (let i = 0; i < 3; i++) {
+            const prompt = fillPromptTemplate(cfg.descPrompt, {
+                ...getCurrentAIContext(),
+                desc: working,
+                limit: String(limit)
+            })
+            result = (await requestAIText(prompt)).replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+            if (countDescUnits(result) <= limit) break
+            working = result
+        }
+        const units = countDescUnits(result)
+        aiPreviewMode.value = 'desc'
+        aiPreviewOriginalDesc.value = currentForm.value.desc || ''
+        aiPreviewText.value = result.slice(0, 2000)
+        aiPreviewSourceUnits.value = countDescUnits(currentForm.value.desc || '')
+        aiPreviewResultUnits.value = units
+        showAIPreviewDialog.value = true
+        utilsStore.showMessage(
+            units <= limit
+                ? `AI 简介已生成预览（${units}/${limit}）`
+                : `AI 简介预览仍偏长（${units}/${limit}），可继续优化或手动调整`,
+            units <= limit ? 'success' : 'warning'
+        )
+    } catch (error) {
+        utilsStore.showMessage(`AI 简介优化失败: ${error}`, 'error')
+    } finally {
+        aiWorking.value.desc = false
+    }
+}
+
+const cancelAIPreview = () => {
+    showAIPreviewDialog.value = false
+    aiPreviewText.value = ''
+    aiPreviewTitleOptions.value = []
+    aiPreviewSelectedTitle.value = ''
+    aiPreviewOriginalTitle.value = ''
+    aiPreviewCleanTitle.value = ''
+    aiPreviewOriginalDesc.value = ''
+}
+
+const copyTextValue = async (value: string) => {
+    const text = (value || '').trim()
+    if (!text) return
+    try {
+        await navigator.clipboard.writeText(text)
+        utilsStore.showMessage('已复制', 'success')
+    } catch (error) {
+        utilsStore.showMessage(`复制失败: ${error}`, 'error')
+    }
+}
+
+const copyAIPreviewTitle = async () => {
+    try {
+        await navigator.clipboard.writeText((aiPreviewText.value || aiPreviewSelectedTitle.value || '').trim())
+        utilsStore.showMessage('标题已复制', 'success')
+    } catch (error) {
+        utilsStore.showMessage(`复制失败: ${error}`, 'error')
+    }
+}
+
+const applyAIPreview = () => {
+    if (!currentForm.value) return
+    if (aiPreviewMode.value === 'title') {
+        const nextTitle = (aiPreviewText.value || aiPreviewSelectedTitle.value || '').trim()
+        if (!nextTitle) {
+            utilsStore.showMessage('请选择一个标题', 'warning')
+            return
+        }
+        currentForm.value.title = nextTitle.slice(0, 80)
+        utilsStore.showMessage('已应用 AI 标题', 'success')
+    } else if (aiPreviewMode.value === 'tag') {
+        const nextTags = normalizeTagText(aiPreviewText.value)
+            .split(',')
+            .map(v => normalizeTagToken(v))
+            .filter(Boolean)
+        const uniq = nextTags.filter((item, index, arr) => arr.findIndex(v => v.toLowerCase() === item.toLowerCase()) === index)
+        tags.value = uniq.slice(0, 12)
+        currentForm.value.tag = tags.value.join(',')
+        utilsStore.showMessage('已应用 AI 标签', 'success')
+    } else if (aiPreviewMode.value === 'desc') {
+        currentForm.value.desc = aiPreviewText.value.slice(0, 2000)
+        utilsStore.showMessage(
+            `已应用 AI 简介（${countDescUnits(currentForm.value.desc || '')}/${currentAIDescLimit.value}）`,
+            'success'
+        )
+    }
+    cancelAIPreview()
+}
+
+const rerunAIDesc = async () => {
+    if (aiPreviewMode.value !== 'desc') return
+    if (!currentForm.value) return
+    currentForm.value.desc = aiPreviewText.value
+    await runAIDesc()
+}
+
+const restoreOriginalDesc = () => {
+    if (!currentForm.value) return
+    if (aiPreviewMode.value !== 'desc') return
+    aiPreviewText.value = aiPreviewOriginalDesc.value
+    aiPreviewResultUnits.value = countDescUnits(aiPreviewText.value)
+}
+
+const loadFolderApplyVideoOptions = async (folderPath: string, defaultVideoId = '') => {
+    folderApplyVideoOptions.value = []
+    folderApplySelectedVideoId.value = ''
+    if (!folderPath) return
+    try {
+        const entries = await utilsStore.readDirRecursive(folderPath, false, 2)
+        const files = entries.filter(item => !item.is_directory)
+        const mp4Files = files.filter(f => /\.(mp4|mkv|mov|flv|webm)$/i.test(f.name))
+        const options = mp4Files
+            .map(file => {
+                const id = extractVideoIdFromText(file.name)
+                if (!id) return null
+                return {
+                    value: id,
+                    label: inferTitleFromFileName(file.name) || file.name
+                }
+            })
+            .filter(Boolean) as Array<{ label: string; value: string }>
+        const uniq = options.filter(
+            (item, index, arr) => arr.findIndex(v => v.value === item.value) === index
+        )
+        folderApplyVideoOptions.value = uniq
+        if (defaultVideoId && uniq.some(item => item.value === defaultVideoId)) {
+            folderApplySelectedVideoId.value = defaultVideoId
+        } else if (uniq.length === 1) {
+            folderApplySelectedVideoId.value = uniq[0].value
+        }
+    } catch (error) {
+        console.error('加载模板文件夹视频列表失败:', error)
+    }
+}
+
 const applyFolderDataToTemplate = async (
     uid: number,
     templateName: string,
     folderPath: string,
-    options: FolderApplyOptions
+    options: FolderApplyOptions,
+    preferredSessionId?: string
 ) => {
     const template = userConfigStore.getUserTemplate(uid, templateName)
     if (!template) throw new Error('模板不存在')
 
-    let targetSession = editSessions.value.find(
-        session => session.uid === uid && session.templateName === templateName
-    )
+    let targetSession =
+        (preferredSessionId
+            ? editSessions.value.find(
+                  session =>
+                      session.id === preferredSessionId &&
+                      session.uid === uid &&
+                      session.templateName === templateName
+              )
+            : undefined) ||
+        (activeSessionId.value
+            ? editSessions.value.find(
+                  session =>
+                      session.id === activeSessionId.value &&
+                      session.uid === uid &&
+                      session.templateName === templateName
+              )
+            : undefined) ||
+        editSessions.value.find(session => session.uid === uid && session.templateName === templateName)
+
     if (!targetSession) {
         const targetUser = loginUsers.value.find(user => user.uid === uid)
         if (!targetUser) throw new Error('目标用户不存在')
         await openTemplateSession(targetUser, templateName)
-        targetSession = editSessions.value.find(
-            session => session.uid === uid && session.templateName === templateName
-        )
+        targetSession =
+            (preferredSessionId
+                ? editSessions.value.find(
+                      session =>
+                          session.id === preferredSessionId &&
+                          session.uid === uid &&
+                          session.templateName === templateName
+                  )
+                : undefined) ||
+            (activeSessionId.value
+                ? editSessions.value.find(
+                      session =>
+                          session.id === activeSessionId.value &&
+                          session.uid === uid &&
+                          session.templateName === templateName
+                  )
+                : undefined) ||
+            editSessions.value.find(
+                session => session.uid === uid && session.templateName === templateName
+            )
     }
     if (!targetSession) throw new Error('未找到可应用的模板标签页')
 
-    const extracted = await extractFolderTemplateData(folderPath)
+    const draftVideos = targetSession.draft?.videos || []
+    const preferredVideoId =
+        options.preferredVideoId ||
+        draftVideos
+            .map(v => extractVideoIdFromText(String(v?.filename || v?.path || v?.title || '')))
+            .find(Boolean) ||
+        ''
+    const extracted = await extractFolderTemplateData(folderPath, preferredVideoId)
     const patch: Partial<TemplateConfig> = {}
+    const cfg = getAIConfig()
 
-    if (options.title && extracted.title) patch.title = extracted.title
+    if (options.title && extracted.title) {
+        const existingTitle = (targetSession.draft?.title || '').trim()
+        const templateTitle = resolveTemplateTitleSeed(
+            targetSession.draft?.template_title_seed || '',
+            existingTitle,
+            targetSession.templateName || '',
+            extracted.rawTitle || extracted.title || ''
+        )
+        const originalTitle = extracted.rawTitle || extracted.title || ''
+        const cleanTitle = stripImportedTitleTags(originalTitle)
+        const tagVars = buildTagTemplateVars(extracted.tag || '')
+        patch.import_title_format_template =
+            options.importTitleFormatTemplate || targetSession.draft?.import_title_format_template
+        patch.ai_title_format_template =
+            options.aiTitleFormatTemplate || targetSession.draft?.ai_title_format_template
+        patch.ai_title_source = options.aiTitleSource || targetSession.draft?.ai_title_source || 'clean'
+        patch.template_title_seed = templateTitle || undefined
+        patch.imported_original_title = originalTitle || undefined
+        patch.imported_clean_title = cleanTitle || undefined
+        patch.imported_date = extracted.date || undefined
+        patch.imported_source_url = extracted.videoId
+            ? `https://youtu.be/${extracted.videoId}`
+            : normalizeImportedSourceUrl(extracted.source || '')
+        patch.title =
+            formatImportedTitle(
+                options.importTitleFormatTemplate ||
+                    getEffectiveImportTitleTemplate(targetSession.draft) ||
+                    '${template_title}[${date}]${clean_title}',
+                {
+                    template_title: templateTitle,
+                    original_title: originalTitle,
+                    clean_title: cleanTitle,
+                    translated_title: cleanTitle,
+                    date: extracted.date || '',
+                    month: extracted.month || '',
+                    video_id: extracted.videoId || '',
+                    uploader_name: extracted.uploaderName || '',
+                    uploader_handle: extracted.uploaderHandle || '',
+                    uploader_credit: extracted.uploaderCredit || '',
+                    tag_list: tagVars.tag_list,
+                    tag1: tagVars.tag1,
+                    tag2: tagVars.tag2
+                }
+            ) || existingTitle || extracted.title
+    }
     patch.copyright = 2
-    if (options.tag && extracted.tag) patch.tag = extracted.tag
+    if (options.tag && extracted.tag) {
+        const mergedTagInput = mergeTagLists(extracted.tag, cfg.defaultImportTags || '')
+        if (cfg.apiKey?.trim() && cfg.tagPrompt?.trim()) {
+            try {
+                const tagPrompt = fillPromptTemplate(cfg.tagPrompt, {
+                    tags: mergedTagInput,
+                    original_title: extracted.rawTitle || extracted.title || '',
+                    last_line: extractLastNonEmptyLine(extracted.desc || ''),
+                    tag_rules: cfg.tagRuleNotes || ''
+                })
+                const aiTagResult = await requestAITextIfEnabled(tagPrompt)
+                patch.tag = aiTagResult
+                    ? canonicalizeAITagOutput(aiTagResult, mergedTagInput, cfg.defaultImportTags || '')
+                    : mergedTagInput
+            } catch {
+                patch.tag = mergedTagInput
+            }
+        } else {
+            patch.tag = mergedTagInput
+        }
+    }
     if (options.source && extracted.source) patch.source = extracted.source
-    if (options.desc) {
-        patch.desc = withHomepageSourceLine(extracted.desc, extracted.source)
+    const descMode: 'none' | 'replace' | 'prefix3' =
+        options.descMode || (options.desc ? 'replace' : 'none')
+    if (descMode === 'replace') {
+        patch.desc = (extracted.desc || '').trim().slice(0, 2000)
+    } else if (descMode === 'prefix3') {
+        const prefix = buildImportedDescPrefix(extracted.desc || '')
+        if (prefix) {
+            const existing = (targetSession.draft?.desc || '').trim()
+            patch.desc = `${prefix}${existing ? `\n${existing}` : ''}`.slice(0, 2000)
+        }
     }
     // 应用模板文件夹时默认切到 音乐-翻唱 分区
     patch.tid = 31
@@ -2127,6 +3625,18 @@ const clearTemplateCoverPath = (uid: number, templateName: string) => {
     }
 }
 
+const currentTabCoverSource = computed(() => (currentForm.value?.cover || '').trim())
+const canUseCurrentTabCover = computed(() => !!currentTabCoverSource.value)
+
+const useCurrentTabCoverForTemplate = (uid: number, templateName: string) => {
+    if (!currentTabCoverSource.value) {
+        utilsStore.showMessage('当前标签页没有可复用的封面', 'warning')
+        return
+    }
+    setTemplateCoverPath(uid, templateName, currentTabCoverSource.value)
+    utilsStore.showMessage('已将当前标签页封面设置为模板封面', 'success')
+}
+
 const getFolderCoverPath = (uid: number, folderId: string) => {
     const organizer = getUserOrganizer(uid)
     const folder = organizer.folders.find(item => item.id === folderId)
@@ -2150,6 +3660,15 @@ const clearFolderCoverPath = (uid: number, folderId: string) => {
     folder.coverPath = ''
     bumpCoverVersion(oldPath)
     saveTemplateOrganizer()
+}
+
+const useCurrentTabCoverForFolder = (uid: number, folderId: string) => {
+    if (!currentTabCoverSource.value) {
+        utilsStore.showMessage('当前标签页没有可复用的封面', 'warning')
+        return
+    }
+    setFolderCoverPath(uid, folderId, currentTabCoverSource.value)
+    utilsStore.showMessage('已将当前标签页封面设置为模板夹封面', 'success')
 }
 
 const handleCoverError = async (
@@ -2412,8 +3931,14 @@ const openFolderApplyDialogForCurrent = () => {
     }
     folderApplyUid.value = selectedUser.value.uid
     folderApplyTemplateName.value = currentTemplateName.value
+    folderApplySessionId.value = activeSessionId.value
     folderApplyPath.value = getDefaultFolderApplyDir()
-    folderApplyFields.value = ['cover', 'desc', 'tag', 'source']
+    folderApplyFields.value = getFolderApplyFieldsPref(selectedUser.value.uid, currentTemplateName.value)
+    folderApplyDescMode.value = getFolderApplyDescModePref(selectedUser.value.uid, currentTemplateName.value)
+    folderApplyImportTitleFormatTemplate.value = getEffectiveImportTitleTemplate(currentForm.value)
+    folderApplyAITitleFormatTemplate.value = getEffectiveAITitleTemplate(currentForm.value)
+    folderApplyAITitleSource.value = getEffectiveAITitleSource(currentForm.value)
+    void loadFolderApplyVideoOptions(folderApplyPath.value, getCurrentDraftPreferredVideoId())
     showFolderApplyDialog.value = true
 }
 
@@ -2428,6 +3953,7 @@ const selectFolderApplyPath = async () => {
         const picked = String(selected)
         folderApplyPath.value = picked
         setDefaultFolderApplyDir(picked)
+        await loadFolderApplyVideoOptions(picked, getCurrentDraftPreferredVideoId())
     } catch (error) {
         utilsStore.showMessage(`选择文件夹失败: ${error}`, 'error')
     }
@@ -2442,21 +3968,32 @@ const confirmFolderApplyDialog = async () => {
         utilsStore.showMessage('请先选择文件夹', 'warning')
         return
     }
-    const picked = new Set(folderApplyFields.value || [])
-    const options: FolderApplyOptions = {
-        title: picked.has('title'),
-        cover: picked.has('cover'),
-        desc: picked.has('desc'),
-        tag: picked.has('tag'),
-        source: picked.has('source')
+    try {
+        const picked = new Set(folderApplyFields.value || [])
+        setFolderApplyFieldsPref(Array.from(picked), folderApplyUid.value, folderApplyTemplateName.value)
+        setFolderApplyDescModePref(folderApplyDescMode.value, folderApplyUid.value, folderApplyTemplateName.value)
+        const options: FolderApplyOptions = {
+            title: picked.has('title'),
+            cover: picked.has('cover'),
+            descMode: folderApplyDescMode.value,
+            tag: picked.has('tag'),
+            source: picked.has('source'),
+            preferredVideoId: folderApplySelectedVideoId.value || undefined,
+            importTitleFormatTemplate: folderApplyImportTitleFormatTemplate.value.trim() || undefined,
+            aiTitleFormatTemplate: folderApplyAITitleFormatTemplate.value.trim() || undefined,
+            aiTitleSource: folderApplyAITitleSource.value
+        }
+        await applyFolderDataToTemplate(
+            folderApplyUid.value,
+            folderApplyTemplateName.value,
+            folderApplyPath.value,
+            options,
+            folderApplySessionId.value || undefined
+        )
+        showFolderApplyDialog.value = false
+    } catch (error) {
+        utilsStore.showMessage(`应用模板文件夹失败: ${error}`, 'error')
     }
-    await applyFolderDataToTemplate(
-        folderApplyUid.value,
-        folderApplyTemplateName.value,
-        folderApplyPath.value,
-        options
-    )
-    showFolderApplyDialog.value = false
 }
 
 const handleApplyFolderToTemplateFromDialog = async (
@@ -2796,6 +4333,9 @@ const performTemplateSubmit = async (
             } catch (error) {
                 utilsStore.showMessage(`${error}`, 'error')
             } finally {
+                if (targetSession?.draft?.auto_close_after_submit && targetSession?.id) {
+                    await closeSessionTab(targetSession.id)
+                }
                 submitting.value = false
             }
         }, 500)
@@ -3116,6 +4656,11 @@ watch(
 )
 
 let keyboardCleanup: (() => void) | null = null
+let dragDropCleanup: (() => void) | null = null
+let dragOverCleanup: (() => void) | null = null
+let dragLeaveCleanup: (() => void) | null = null
+let lastDroppedSignature = ''
+let lastDroppedAt = 0
 
 const forwardConsole = (fnName: keyof Console, logger: (level: string, ...args: any[]) => void) => {
     const original = console[fnName] as (...args: any[]) => void
@@ -3154,6 +4699,13 @@ onUnmounted(() => {
     if (keyboardCleanup) {
         keyboardCleanup()
     }
+
+    dragDropCleanup?.()
+    dragOverCleanup?.()
+    dragLeaveCleanup?.()
+    dragDropCleanup = null
+    dragOverCleanup = null
+    dragLeaveCleanup = null
 
     // 清理自动提交间隔检查
     if (autoSubmitInterval) {
@@ -3307,7 +4859,9 @@ const hasUnsavedChanges = (
         'up_close_reply',
         'up_close_danmu',
         'is_only_self',
-        'watermark'
+        'space_hidden',
+        'watermark',
+        'auto_close_after_submit'
     ]
 
     for (const field of fieldsToCompare) {
@@ -3359,25 +4913,44 @@ const hasUnsavedChanges = (
 // 设置拖拽功能
 const setupDragAndDrop = async () => {
     try {
+        dragDropCleanup?.()
+        dragOverCleanup?.()
+        dragLeaveCleanup?.()
+        dragDropCleanup = null
+        dragOverCleanup = null
+        dragLeaveCleanup = null
+
         // 监听文件拖拽事件
-        await listen('tauri://drag-drop', async event => {
+        dragDropCleanup = await listen('tauri://drag-drop', async event => {
             const videos = event.payload as string[]
             isDragOver.value = false
             if (templateLoading.value) {
                 utilsStore.showMessage('模板加载中', 'warning')
                 return
             }
+
+            const normalizedPaths = Array.isArray(videos)
+                ? [...videos].map(item => String(item || '').toLowerCase()).sort()
+                : []
+            const signature = normalizedPaths.join('|')
+            const now = Date.now()
+            if (signature && signature === lastDroppedSignature && now - lastDroppedAt < 1500) {
+                return
+            }
+            lastDroppedSignature = signature
+            lastDroppedAt = now
+
             await handleDroppedFiles(videos)
         })
 
         // 监听拖拽悬停事件
-        await listen('tauri://drag-over', event => {
+        dragOverCleanup = await listen('tauri://drag-over', event => {
             if (!isDragOver.value) console.log('文件拖拽悬停:', event.payload, '，忽略后续日志')
             isDragOver.value = true
         })
 
         // 监听拖拽取消事件
-        await listen('tauri://drag-leave', () => {
+        dragLeaveCleanup = await listen('tauri://drag-leave', () => {
             console.log('文件拖拽取消')
             isDragOver.value = false
         })
@@ -3682,19 +5255,23 @@ const getCardDisplayName = (cardType: string): string => {
     return cardNames[cardType] || cardType
 }
 
-const ensureTitleFromFirstVideo = (videoTitle: string) => {
-    if (!currentForm.value) return
+const ensureTitleFromDraft = (draft: TemplateConfig | null | undefined, videoTitle: string) => {
+    if (!draft) return
 
-    const currentTitle = (currentForm.value.title || '').trim()
+    const currentTitle = (draft.title || '').trim()
     if (currentTitle) return
 
     const importedVideoTitle = (videoTitle || '').trim()
     if (importedVideoTitle) {
-        currentForm.value.title = importedVideoTitle
+        draft.title = importedVideoTitle
     }
 }
 
-const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) => {
+const addVideoToSession = async (
+    sessionId: string,
+    videoPath: string,
+    customTitle?: string
+) => {
     // 从路径中提取文件名
     const videoBaseName = videoPath.split(/[/\\]/).pop() || videoPath
     const videoNameWOExtension = videoBaseName.replace(/\.[^/.]+$/, '').slice(0, 80)
@@ -3721,19 +5298,20 @@ const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) =>
         return 0 // 不支持的格式，跳过添加
     }
 
-    // 检查文件是否已经存在
-    if (!currentForm.value) {
+    const session = editSessions.value.find(item => item.id === sessionId)
+    const targetDraft = session?.draft
+    if (!session || !targetDraft) {
         return 0 // 没有当前模板，跳过添加
     }
 
-    const existingFile = currentForm.value.videos.find(
+    const existingFile = targetDraft.videos.find(
         f => f.path === videoPath || finalTitle === f.title
     )
     if (existingFile) {
         return 0 // 跳过已存在的文件
     }
 
-    const currentAddedVideos = currentForm.value.videos.filter(video => {
+    const currentAddedVideos = targetDraft.videos.filter(video => {
         return (
             (video.finished_at && video.finished_at > 0) || (video.path && video.path.trim() !== '')
         )
@@ -3755,7 +5333,7 @@ const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) =>
 
     // 添加到currentForm.videos
     const videoId = uuidv4()
-    currentForm.value.videos.push({
+    targetDraft.videos.push({
         id: videoId,
         filename: videoBaseName, // 使用完整的文件路径
         title: finalTitle, // 去除扩展名作为标题或使用自定义标题
@@ -3766,16 +5344,18 @@ const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) =>
     })
 
     // 标题为空时，自动使用本次导入的第一个视频文件名（去扩展名）作为标题
-    ensureTitleFromFirstVideo(finalTitle)
+    ensureTitleFromDraft(targetDraft, finalTitle)
+    touchSessionById(sessionId)
+    schedulePersistSessions()
 
     // 检查是否启用自动添加到上传队列
-    if (userConfigStore.configRoot?.auto_upload && selectedUser.value) {
+    if (userConfigStore.configRoot?.auto_upload) {
         try {
             // 自动创建上传任务
             await uploadStore.createUploadTask(
-                selectedUser.value.uid,
-                currentTemplateName.value,
-                currentForm.value.videos
+                session.uid,
+                session.templateName,
+                targetDraft.videos
             )
             console.log(`自动添加文件到上传队列: ${videoBaseName}`)
 
@@ -3797,6 +5377,31 @@ const addVideoToCurrentForm = async (videoPath: string, customTitle?: string) =>
     return 1
 }
 
+const addVideosInBatches = async (
+    sessionId: string,
+    items: Array<string | { path: string; title?: string }>
+) => {
+    let addedCount = 0
+    for (let index = 0; index < items.length; index++) {
+        const item = items[index]
+        if (typeof item === 'string') {
+            addedCount += await addVideoToSession(sessionId, item)
+        } else if (item?.path) {
+            addedCount += await addVideoToSession(sessionId, item.path, item.title)
+        }
+        if ((index + 1) % 5 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 0))
+        }
+    }
+    return addedCount
+}
+
+const getStableActiveSessionId = () => {
+    const sessionId = activeSessionId.value
+    if (!sessionId) return ''
+    return editSessions.value.some(item => item.id === sessionId) ? sessionId : ''
+}
+
 // 处理拖拽文件
 const handleDroppedFiles = async (videoFiles: any) => {
     // 检查是否有选中的用户和模板
@@ -3805,13 +5410,95 @@ const handleDroppedFiles = async (videoFiles: any) => {
         return
     }
 
-    // 添加视频文件到当前模板
-    let addedCount = 0
-    templateLoading.value = true
-    for (const videoPath of videoFiles.paths) {
-        addedCount += await addVideoToCurrentForm(videoPath)
+    const targetSessionId = activeSessionId.value
+    const targetSession = editSessions.value.find(item => item.id === targetSessionId)
+    if (!targetSession) {
+        utilsStore.showMessage('当前编辑标签页不存在，请重试', 'warning')
+        return
     }
-    templateLoading.value = false
+
+    const paths: string[] = Array.isArray(videoFiles?.paths) ? videoFiles.paths : []
+    const directoryPaths: string[] = []
+    const filePaths: string[] = []
+    for (const p of paths) {
+        try {
+            const info: any = await stat(p)
+            if (info?.isDirectory || info?.is_directory) {
+                directoryPaths.push(p)
+            } else {
+                filePaths.push(p)
+            }
+        } catch {
+            filePaths.push(p)
+        }
+    }
+
+    if (directoryPaths.length > 0) {
+        const targetDir = directoryPaths[0]
+        try {
+            await ElMessageBox.confirm(
+                `检测到文件夹拖拽：\n${targetDir}\n\n确定：应用到当前模板草稿\n取消：作为监控文件夹（将记录为监控默认目录）`,
+                '文件夹拖拽',
+                {
+                    confirmButtonText: '应用模板',
+                    cancelButtonText: '用于监控',
+                    distinguishCancelAndClose: true,
+                    type: 'info'
+                }
+            )
+            folderApplyPath.value = targetDir
+            setDefaultFolderApplyDir(targetDir)
+            folderApplyUid.value = selectedUser.value.uid
+            folderApplyTemplateName.value = currentTemplateName.value
+            folderApplySessionId.value = activeSessionId.value
+            folderApplyFields.value = getFolderApplyFieldsPref(selectedUser.value.uid, currentTemplateName.value)
+            folderApplyDescMode.value = getFolderApplyDescModePref(selectedUser.value.uid, currentTemplateName.value)
+            folderApplyImportTitleFormatTemplate.value = getEffectiveImportTitleTemplate(currentForm.value)
+            folderApplyAITitleFormatTemplate.value = getEffectiveAITitleTemplate(currentForm.value)
+            folderApplyAITitleSource.value = getEffectiveAITitleSource(currentForm.value)
+            void loadFolderApplyVideoOptions(targetDir, getCurrentDraftPreferredVideoId())
+            showFolderApplyDialog.value = true
+        } catch (error) {
+            if (error === 'cancel') {
+                localStorage.setItem('default-watch-dir', targetDir)
+                watchInitialFolder.value = targetDir
+                watchOpenToken.value += 1
+                utilsStore.showMessage('已自动打开监控面板并填入该文件夹', 'success')
+            }
+        }
+        return
+    }
+
+    const isVideoPath = (p: string) =>
+        /\.(mp4|flv|avi|wmv|mov|webm|mpeg4|ts|mpg|rm|rmvb|mkv|m4v)$/i.test(p || '')
+    const isImagePath = (p: string) => /\.(jpg|jpeg|png|webp|bmp)$/i.test(p || '')
+    const videoPaths = filePaths.filter(isVideoPath)
+    const imagePaths = filePaths.filter(isImagePath)
+
+    // 图片拖拽：作为封面应用（单次草稿）
+    if (imagePaths.length > 0 && videoPaths.length === 0 && selectedUser.value && currentForm.value) {
+        try {
+            const coverPath = imagePaths[0]
+            const url = await utilsStore.uploadCover(selectedUser.value.uid, coverPath)
+            if (url) {
+                currentForm.value.cover = url
+                utilsStore.showMessage('已将拖拽图片应用为封面（未自动保存）', 'success')
+            } else {
+                utilsStore.showMessage('封面应用失败', 'error')
+            }
+        } catch (error) {
+            utilsStore.showMessage(`封面应用失败: ${error}`, 'error')
+        }
+        return
+    }
+
+    if (videoPaths.length === 0) {
+        utilsStore.showMessage('未检测到可添加的视频文件', 'warning')
+        return
+    }
+
+    // 添加视频文件到当前模板
+    const addedCount = await addVideosInBatches(targetSessionId, videoPaths)
 
     if (addedCount > 0) {
         utilsStore.showMessage(`成功添加 ${addedCount} 个视频文件`, 'success')
@@ -3916,6 +5603,7 @@ const getSessionTitle = (uid: number, templateName: string) => {
 const setActiveSession = async (sessionId: string) => {
     const session = editSessions.value.find(item => item.id === sessionId)
     if (!session) return
+    showTemplateTitleSettings.value = false
     activeSessionId.value = session.id
     selectedUser.value =
         loginUsers.value.find(user => user.uid === session.uid) || {
@@ -4045,7 +5733,6 @@ const handleTabLabelMouseup = async (event: MouseEvent, sessionId: string) => {
 const selectTemplate = async (user: any, templateName: string) => {
     if (templateLoading.value) return
 
-    templateLoading.value = true
     try {
         await openTemplateSession(user, templateName)
         console.log(`已打开模板标签页: ${user.username} - ${templateName}`)
@@ -4374,6 +6061,10 @@ const handleTemplateCommand = async (
             await selectTemplateCover(user.uid, template.name)
             break
 
+        case 'use_tab_cover':
+            useCurrentTabCoverForTemplate(user.uid, template.name)
+            break
+
         case 'clear_cover':
             clearTemplateCoverPath(user.uid, template.name)
             utilsStore.showMessage('已清除模板封面', 'success')
@@ -4571,12 +6262,15 @@ const selectVideoWithTauri = async () => {
         })
 
         var added = 0
+        const targetSessionId = getStableActiveSessionId()
+        if (!targetSessionId) {
+            utilsStore.showMessage('当前编辑标签页不存在，请重试', 'warning')
+            return
+        }
 
         if (selected && Array.isArray(selected)) {
             const selectedPaths = selected as string[]
-            for (const videoPath of selectedPaths) {
-                added += await addVideoToCurrentForm(videoPath)
-            }
+            added += await addVideosInBatches(targetSessionId, selectedPaths)
 
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
             if (selectedPaths.length > 0) {
@@ -4588,7 +6282,7 @@ const selectVideoWithTauri = async () => {
             }
         } else if (typeof selected === 'string') {
             const selectedPath = String(selected)
-            added += await addVideoToCurrentForm(selectedPath)
+            added += await addVideosInBatches(targetSessionId, [selectedPath])
             utilsStore.showMessage(`已选择 ${added} 个文件`, 'success')
             const folder = selectedPath.split(/[/\\]/).slice(0, -1).join('\\')
             if (folder) setDefaultVideoPickerDir(folder)
@@ -4596,8 +6290,6 @@ const selectVideoWithTauri = async () => {
     } catch (error) {
         console.error('文件选择失败: ', error)
         utilsStore.showMessage(`'文件选择失败: ${error}'`, 'error')
-    } finally {
-        templateLoading.value = false
     }
 }
 
@@ -4745,19 +6437,17 @@ const createUpload = async () => {
 
 // 处理文件夹监控添加视频事件
 const handleAddVideosToForm = async (newVideos: any[]) => {
-    templateLoading.value = true
-    for (const item of newVideos) {
-        try {
-            if (typeof item === 'string') {
-                await addVideoToCurrentForm(item)
-            } else if (item?.path) {
-                await addVideoToCurrentForm(item.path, item.title)
-            }
-        } catch (error) {
-            console.error('添加视频失败:', item, error)
+    const normalizedItems = newVideos.filter((item: any) => typeof item === 'string' || item?.path)
+    try {
+        const targetSessionId = getStableActiveSessionId()
+        if (!targetSessionId) {
+            utilsStore.showMessage('当前编辑标签页不存在，请重试', 'warning')
+            return
         }
+        await addVideosInBatches(targetSessionId, normalizedItems)
+    } catch (error) {
+        console.error('添加视频失败:', error)
     }
-    templateLoading.value = false
 }
 
 // 处理文件夹监控提交稿件事件
@@ -5056,6 +6746,48 @@ const exportLogs = async () => {
         if (error !== 'cancel') {
             console.error('导出日志失败:', error)
         }
+    }
+}
+
+const exportCurrentSessionLogs = async () => {
+    try {
+        const now = new Date()
+        const defaultExportDir = getDefaultLogExportDir()
+        const savePath = joinWinPath(defaultExportDir, `biliup-current-session-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.log`)
+        await utilsStore.exportCurrentSessionLog(savePath, appLaunchTs.value)
+        console.log('本次启动日志导出成功：', savePath)
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('导出本次启动日志失败:', error)
+        }
+    }
+}
+
+const clearOldLogs = async () => {
+    try {
+        await ElMessageBox.confirm('将清理本次启动之前生成的旧日志文件，是否继续？', '清理旧日志', {
+            confirmButtonText: '清理',
+            cancelButtonText: '取消',
+            type: 'warning'
+        })
+        await utilsStore.clearOldLogs(appLaunchTs.value)
+    } catch (error) {
+        if (error !== 'cancel') {
+            console.error('清理旧日志失败:', error)
+        }
+    }
+}
+
+const refreshSeasonList = async () => {
+    if (!selectedUser.value) {
+        utilsStore.showMessage('请先选择用户', 'warning')
+        return
+    }
+    try {
+        await utilsStore.getSeasonList(selectedUser.value.uid)
+        utilsStore.showMessage('合集列表已刷新', 'success')
+    } catch (error) {
+        utilsStore.showMessage(`刷新合集失败: ${error}`, 'error')
     }
 }
 
@@ -5491,22 +7223,27 @@ body.sidebar-resizing {
 .template-item.auto-submitting {
     position: relative;
     overflow: hidden;
-    background: linear-gradient(45deg, #e3f2fd, #f3e5f5);
+    background: linear-gradient(135deg, #eaf6ff 0%, #fff7e8 45%, #eef7ff 100%);
     border: 2px solid #409eff;
-    box-shadow: 0 0 20px rgba(64, 158, 255, 0.4);
-    animation: pulse-border 1.5s ease-in-out infinite alternate;
+    box-shadow: 0 0 22px rgba(64, 158, 255, 0.42);
+    animation: pulse-border 1.3s ease-in-out infinite alternate;
 }
 
 .template-item.auto-submitting::before {
     content: '';
     position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(64, 158, 255, 0.6), transparent);
-    animation: shimmer 1.5s infinite;
+    inset: -18%;
+    border-radius: 18px;
+    background: conic-gradient(
+        from 0deg,
+        rgba(64, 158, 255, 0) 0deg,
+        rgba(64, 158, 255, 0.18) 80deg,
+        rgba(255, 179, 71, 0.28) 160deg,
+        rgba(64, 158, 255, 0) 360deg
+    );
+    animation: rotate-glow 2.2s linear infinite;
     z-index: 1;
+    pointer-events: none;
 }
 
 .template-item.auto-submitting::after {
@@ -5524,6 +7261,7 @@ body.sidebar-resizing {
 .template-item.auto-submitting .template-main {
     position: relative;
     z-index: 2;
+    backdrop-filter: blur(1px);
 }
 
 .template-item.auto-submitting .template-name {
@@ -5790,6 +7528,32 @@ body.sidebar-resizing {
 .editor-tab-label.auto-submit-tab {
     color: #1d4ed8;
     font-weight: 700;
+    position: relative;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, rgba(64, 158, 255, 0.14), rgba(255, 193, 7, 0.16));
+    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.18), 0 0 14px rgba(64, 158, 255, 0.2);
+    animation: auto-submit-tab-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.editor-tab-label.auto-submit-tab::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 999px;
+    border: 1px solid rgba(64, 158, 255, 0.35);
+    pointer-events: none;
+}
+
+@keyframes auto-submit-tab-pulse {
+    0% {
+        transform: translateY(0);
+        box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.18), 0 0 10px rgba(64, 158, 255, 0.16);
+    }
+    100% {
+        transform: translateY(-1px);
+        box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.3), 0 0 18px rgba(64, 158, 255, 0.3);
+    }
 }
 
 .template-name-container {
@@ -6140,6 +7904,45 @@ body.sidebar-resizing {
     margin-bottom: 2px;
 }
 
+.season-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+@keyframes rotate-glow {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.template-title-preview {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid #ebeef5;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.template-title-preview-label {
+    font-size: 12px;
+    color: #606266;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.template-title-preview-value {
+    font-size: 13px;
+    line-height: 1.6;
+    color: #303133;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
 /* 分区选择器样式 */
 .category-trigger {
     width: 100%;
@@ -6422,6 +8225,125 @@ body.sidebar-resizing {
 
 .template-item.disabled:hover {
     background: #fff !important;
+}
+
+.ai-field-block {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ai-inline-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.ai-preview-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.ai-preview-title-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ai-preview-source-list {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+
+.ai-preview-source-item {
+    border: 1px solid #ebeef5;
+    border-radius: 8px;
+    padding: 8px;
+    background: #fafafa;
+}
+
+.ai-preview-source-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.ai-preview-title-item {
+    border: 1px solid #dcdfe6;
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ai-preview-title-item.disabled {
+    cursor: default;
+    opacity: 0.78;
+}
+
+.ai-preview-title-item.selected {
+    border-color: #409eff;
+    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.15);
+}
+
+.ai-preview-title-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.ai-preview-style-name {
+    font-size: 12px;
+    line-height: 1.2;
+    color: #606266;
+    font-weight: 600;
+}
+
+.ai-preview-style-status {
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.ai-preview-style-status.error {
+    color: #f56c6c;
+}
+
+.ai-preview-style-status.warning {
+    color: #e6a23c;
+}
+
+.ai-preview-title-readonly :deep(textarea),
+.ai-preview-title-editor :deep(textarea) {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.ai-preview-title-readonly :deep(.el-textarea__inner) {
+    cursor: text;
+    line-height: 1.6;
+    text-align: left;
+}
+
+.ai-preview-title-error {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #f56c6c;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ai-preview-meta {
+    font-size: 12px;
+    color: #909399;
 }
 </style>
 

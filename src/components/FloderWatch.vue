@@ -357,6 +357,7 @@ interface Props {
     modelValue: boolean
     currentVideos: any[]
     templateTitle?: string
+    initialFolders?: string[]
 }
 
 interface Emits {
@@ -432,8 +433,16 @@ const getBatchRenameLines = () =>
 // 监听窗口打开状态，每次打开时清空文件夹路径
 watch(visible, (newValue, oldValue) => {
     if (newValue && !oldValue) {
-        // 窗口从关闭变为打开状态，清空文件夹路径
-        settings.value.folderPaths = []
+        // 窗口从关闭变为打开状态，优先应用外部传入的初始文件夹
+        const incoming = (props.initialFolders || [])
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+        if (incoming.length > 0) {
+            settings.value.folderPaths = Array.from(new Set(incoming))
+            localStorage.setItem(DEFAULT_WATCH_DIR_KEY, incoming[0])
+        } else {
+            settings.value.folderPaths = []
+        }
     }
 })
 

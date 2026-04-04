@@ -90,6 +90,15 @@ pub async fn get_upload_queue(app: AppHandle) -> Result<Vec<UploadTask>, String>
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_upload_runtime_status(
+    app: AppHandle,
+) -> Result<crate::services::upload_service::UploadRuntimeStatus, String> {
+    let app_lock = app.state::<Mutex<AppData>>();
+    let app_data = app_lock.lock().await;
+    Ok(app_data.upload_service.get_runtime_status().await)
+}
+
 /// 重新上传失败的任务
 #[tauri::command]
 pub async fn retry_upload(app: AppHandle, task_id: String) -> Result<bool, String> {

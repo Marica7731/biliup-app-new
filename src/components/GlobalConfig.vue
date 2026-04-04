@@ -7,10 +7,8 @@
         @close="handleDialogClose"
     >
         <el-form :model="configForm" label-width="140px" v-loading="loading">
-            <!-- 配置分类标签 -->
-            <el-divider content-position="left">
-                <el-text type="primary" size="large">全局设置</el-text>
-            </el-divider>
+            <el-collapse v-model="configSections">
+                <el-collapse-item title="基础设置" name="basic">
 
             <!-- 最大并发任务数 -->
             <el-form-item label="最大并发任务数">
@@ -104,17 +102,110 @@
             </el-form-item>
             <el-form-item label="封面缩略图大小">
                 <el-radio-group v-model="templateCoverSize">
-                    <el-radio-button :value="48">小</el-radio-button>
-                    <el-radio-button :value="64">中</el-radio-button>
-                    <el-radio-button :value="80">大</el-radio-button>
+                    <el-radio-button :value="32">小</el-radio-button>
+                    <el-radio-button :value="48">中</el-radio-button>
+                    <el-radio-button :value="64">大</el-radio-button>
                 </el-radio-group>
-                <div class="form-tip">建议使用“小”以提升模板列表加载速度</div>
+                <div class="form-tip">小尺寸会显著减少旧配置里大图封面的渲染压力</div>
             </el-form-item>
 
-            <!-- 用户配置分类标签 -->
-            <el-divider content-position="left">
-                <el-text type="primary" size="large">用户配置</el-text>
-            </el-divider>
+                </el-collapse-item>
+                <el-collapse-item title="AI 连接" name="ai-connection">
+
+            <el-form-item label="API 地址">
+                <el-input v-model="aiConfig.apiBase" placeholder="https://api.deepseek.com" />
+                <div class="form-tip">使用 OpenAI 兼容接口，默认会请求 `/chat/completions`</div>
+            </el-form-item>
+
+            <el-form-item label="API Key">
+                <el-input
+                    v-model="aiConfig.apiKey"
+                    type="password"
+                    show-password
+                    placeholder="请输入 API Key"
+                />
+            </el-form-item>
+
+            <el-form-item label="模型名称">
+                <el-input v-model="aiConfig.model" placeholder="deepseek-chat" />
+                <div class="form-tip">默认支持 `deepseek-chat`、`deepseek-reasoner`，也可改成其他 OpenAI 兼容模型</div>
+            </el-form-item>
+
+            <el-form-item label="简介目标上限">
+                <el-input-number v-model="aiConfig.descLimit" :min="200" :max="1900" />
+                <div class="form-tip">AI 压缩简介时，会尽量收敛到该上限以内</div>
+            </el-form-item>
+
+            <el-form-item label="导入默认标签">
+                <el-input v-model="aiConfig.defaultImportTags" placeholder="例如：翻唱,歌回" />
+                <div class="form-tip">应用模板文件夹时会自动追加这些标签，使用英文逗号分隔</div>
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="AI 标题" name="ai-title">
+            <el-form-item label="默认导入标题预设">
+                <el-input v-model="aiConfig.importTitleFormatTemplate" type="textarea" :rows="3" />
+                <div class="form-tip">
+                    可用变量：`${template_title}` `${date}` `${month}` `${original_title}` `${clean_title}` `${video_id}` `${uploader_name}` `${uploader_handle}` `${uploader_credit}` `${tag_list}` `${tag1}` `${tag2}`
+                </div>
+                <div class="form-tip">模板文件夹导入时会按这里的默认预设拼接整标题。默认：`${template_title}[${date}]${clean_title}`</div>
+            </el-form-item>
+
+            <el-form-item label="默认 AI 标题预设">
+                <el-input v-model="aiConfig.aiTitleFormatTemplate" type="textarea" :rows="3" />
+                <div class="form-tip">
+                    可用变量：`${template_title}` `${date}` `${month}` `${original_title}` `${clean_title}` `${translated_title}` `${video_id}` `${uploader_name}` `${uploader_handle}` `${uploader_credit}` `${tag_list}` `${tag1}` `${tag2}`
+                </div>
+                <div class="form-tip">AI 标题应用时会按这里的默认预设拼接整标题。默认：`${template_title}[${date}]${translated_title}`</div>
+            </el-form-item>
+
+            <el-form-item label="标题附加规则">
+                <el-input v-model="aiConfig.titleRuleNotes" type="textarea" :rows="4" />
+            </el-form-item>
+
+            <el-form-item label="风格1名称">
+                <el-input v-model="aiConfig.titleStyleName1" />
+            </el-form-item>
+            <el-form-item label="标题提示词1">
+                <el-input v-model="aiConfig.titlePrompt1" type="textarea" :rows="5" />
+            </el-form-item>
+
+            <el-form-item label="风格2名称">
+                <el-input v-model="aiConfig.titleStyleName2" />
+            </el-form-item>
+            <el-form-item label="标题提示词2">
+                <el-input v-model="aiConfig.titlePrompt2" type="textarea" :rows="5" />
+            </el-form-item>
+
+            <el-form-item label="风格3名称">
+                <el-input v-model="aiConfig.titleStyleName3" />
+            </el-form-item>
+            <el-form-item label="标题提示词3">
+                <el-input v-model="aiConfig.titlePrompt3" type="textarea" :rows="5" />
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="AI 标签" name="ai-tag">
+            <el-form-item label="标签附加规则">
+                <el-input v-model="aiConfig.tagRuleNotes" type="textarea" :rows="4" />
+            </el-form-item>
+
+            <el-form-item label="标签提示词">
+                <el-input v-model="aiConfig.tagPrompt" type="textarea" :rows="6" />
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="AI 简介" name="ai-desc">
+            <el-form-item label="简介附加规则">
+                <el-input v-model="aiConfig.descRuleNotes" type="textarea" :rows="4" />
+            </el-form-item>
+
+            <el-form-item label="简介提示词">
+                <el-input v-model="aiConfig.descPrompt" type="textarea" :rows="6" />
+            </el-form-item>
+
+            <el-form-item label="AI 配置操作">
+                <el-button size="small" @click="resetAIDefaults">重置 AI 默认配置</el-button>
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="用户配置" name="user">
 
             <!-- 用户选择下拉框 -->
             <el-form-item label="选择用户">
@@ -256,6 +347,8 @@
                     </el-form-item>
                 </el-form>
             </div>
+                </el-collapse-item>
+            </el-collapse>
         </el-form>
 
         <template #footer>
@@ -282,6 +375,27 @@ interface GlobalConfigForm {
     auto_upload: boolean
     auto_start: boolean
     log_level: string
+}
+
+interface AIConfigForm {
+    apiBase: string
+    apiKey: string
+    model: string
+    descLimit: number
+    defaultImportTags: string
+    importTitleFormatTemplate: string
+    aiTitleFormatTemplate: string
+    titleStyleName1: string
+    titleStyleName2: string
+    titleStyleName3: string
+    titleRuleNotes: string
+    titlePrompt1: string
+    titlePrompt2: string
+    titlePrompt3: string
+    tagRuleNotes: string
+    tagPrompt: string
+    descRuleNotes: string
+    descPrompt: string
 }
 
 // Props
@@ -311,8 +425,62 @@ const templateTabMax = ref(
     Number.parseInt(localStorage.getItem('template-tab-max') || '15', 10) || 15
 )
 const templateCoverSize = ref(
-    Number.parseInt(localStorage.getItem('template-cover-size') || '48', 10) || 48
+    Number.parseInt(localStorage.getItem('template-cover-size') || '32', 10) || 32
 )
+const configSections = ref(['basic', 'ai-connection', 'ai-title'])
+const AI_CONFIG_KEY = 'ai-config-v1'
+const AI_CONFIG_VERSION = 8
+const getDefaultAIConfig = (): AIConfigForm => ({
+    apiBase: 'https://api.deepseek.com',
+    apiKey: '',
+    model: 'deepseek-chat',
+    descLimit: 1800,
+    defaultImportTags: '翻唱',
+    importTitleFormatTemplate: '${template_title}[${date}]${clean_title}',
+    aiTitleFormatTemplate: '${template_title}[${date}]${translated_title}',
+    titleStyleName1: '简洁直译',
+    titleStyleName2: '吸睛标题',
+    titleStyleName3: '极简封面',
+    titleRuleNotes:
+        '不要输出任何 #标签；保留原文 emoji；「歌枠」优先译为「歌回」；人名、频道名不要翻译；AI 只负责当前选中的标题源正文，不负责日期和视频 ID。',
+    titlePrompt1:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为简洁直译版，结构尽量贴近原文；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    titlePrompt2:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为短视频吸睛标题风，节奏更明快；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    titlePrompt3:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为极简封面版，精炼紧凑，适合封面小字；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    tagRuleNotes:
+        '不要翻译现有标签；不要新增泛标签；仅允许以下特例：shorts -> 竖屏，歌枠 -> 歌回,歌枠；删除 新人Vtuber；保留人名、频道名、企划名与原文大小写。',
+    tagPrompt:
+        '请将以下标签整理为适合 B 站投稿的标签列表。\n要求：\n1. 不要翻译现有标签，不要把日文或英文改成中文；\n2. 不要新增「音乐」「虚拟主播」「直播」这类泛标签；\n3. 只允许在原标签基础上做删减、去重、大小写纠正，以及命中特例规则；\n4. 输出 1 行，使用英文逗号分隔；\n5. 最多输出 12 个标签；\n6. 不要解释。\n附加规则：{{tag_rules}}\n当前标签：{{tags}}\n原标题：{{original_title}}\n简介最后一行：{{last_line}}',
+    descRuleNotes:
+        '尽量缩减换行和多余空格；不要翻译；尽量不改变原简介；优先删掉不重要段落。',
+    descPrompt:
+        '请压缩下面的投稿简介，使其更适合 B 站投稿。\n要求：\n1. 输出纯文本，不加解释；\n2. 保留开头的元信息行；\n3. 目标上限：{{limit}}。\n附加规则：{{desc_rules}}\n简介原文：\n{{desc}}'
+})
+const loadAIConfig = (): AIConfigForm => {
+    try {
+        const raw = localStorage.getItem(AI_CONFIG_KEY)
+        if (!raw) return getDefaultAIConfig()
+        const parsed = (JSON.parse(raw) || {}) as Record<string, any>
+        const defaults = getDefaultAIConfig()
+        const version = Number(parsed._version || 0)
+        if (version < AI_CONFIG_VERSION) {
+            return {
+                ...defaults,
+                apiBase: String(parsed.apiBase || defaults.apiBase),
+                apiKey: String(parsed.apiKey || defaults.apiKey),
+                model: String(parsed.model || defaults.model),
+                descLimit: Number(parsed.descLimit || defaults.descLimit),
+                defaultImportTags: String(parsed.defaultImportTags || defaults.defaultImportTags)
+            }
+        }
+        return { ...defaults, ...parsed }
+    } catch {
+        return getDefaultAIConfig()
+    }
+}
+const aiConfig = ref<AIConfigForm>(getDefaultAIConfig())
 
 // 用户配置相关
 const selectedUserUid = ref<number | null>(null)
@@ -403,7 +571,8 @@ const loadGlobalConfig = async () => {
         templateTabMax.value =
             Number.parseInt(localStorage.getItem('template-tab-max') || '15', 10) || 15
         templateCoverSize.value =
-            Number.parseInt(localStorage.getItem('template-cover-size') || '48', 10) || 48
+            Number.parseInt(localStorage.getItem('template-cover-size') || '32', 10) || 32
+        aiConfig.value = loadAIConfig()
 
         // 确保配置已加载
         if (!userConfigStore.configRoot) {
@@ -483,8 +652,9 @@ const handleSave = async () => {
         localStorage.setItem('template-tab-max', String(Math.min(30, Math.max(3, templateTabMax.value))))
         localStorage.setItem(
             'template-cover-size',
-            String([48, 64, 80].includes(templateCoverSize.value) ? templateCoverSize.value : 48)
+            String([32, 48, 64].includes(templateCoverSize.value) ? templateCoverSize.value : 32)
         )
+        localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ ...aiConfig.value, _version: AI_CONFIG_VERSION }))
 
         utilsStore.showMessage('配置保存成功', 'success')
         emit('config-updated')
@@ -495,6 +665,19 @@ const handleSave = async () => {
     } finally {
         saving.value = false
     }
+}
+
+const resetAIDefaults = () => {
+    const defaults = getDefaultAIConfig()
+    aiConfig.value = {
+        ...defaults,
+        apiBase: aiConfig.value.apiBase || defaults.apiBase,
+        apiKey: aiConfig.value.apiKey || '',
+        model: aiConfig.value.model || defaults.model,
+        descLimit: aiConfig.value.descLimit || defaults.descLimit,
+        defaultImportTags: aiConfig.value.defaultImportTags || defaults.defaultImportTags
+    }
+    utilsStore.showMessage('AI 默认配置已重置，请保存后生效', 'success')
 }
 
 const exportConfig = async () => {

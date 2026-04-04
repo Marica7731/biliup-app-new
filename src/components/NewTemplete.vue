@@ -76,7 +76,7 @@
                     />
                 </el-form-item>
 
-                <el-form-item label="模板文件夹">
+                <el-form-item label="模板文件夹" v-if="newTemplateForm.templateType === 'blank'">
                     <div class="folder-row">
                         <el-input
                             v-model="newTemplateForm.folderPath"
@@ -89,7 +89,10 @@
                     <div class="form-tip">创建后仅应用到当前标签页草稿（不自动保存模板）</div>
                 </el-form-item>
 
-                <el-form-item label="应用字段" v-if="newTemplateForm.folderPath">
+                <el-form-item
+                    label="应用字段"
+                    v-if="newTemplateForm.templateType === 'blank' && newTemplateForm.folderPath"
+                >
                     <el-checkbox-group v-model="newTemplateForm.applyFields">
                         <el-checkbox value="cover">封面</el-checkbox>
                         <el-checkbox value="desc">简介</el-checkbox>
@@ -147,7 +150,8 @@ const showDialog = computed({
     set: value => emit('update:modelValue', value)
 })
 
-const DEFAULT_TEMPLATE_CONTENT_DIR_KEY = 'default-template-content-dir'
+const DEFAULT_TEMPLATE_CONTENT_DIR_KEY = 'default-template-content-dir-new-template'
+const NEW_TEMPLATE_APPLY_FIELDS_KEY = 'new-template-apply-fields'
 
 const newTemplateForm = ref({
     userUid: null,
@@ -182,9 +186,28 @@ const loadUserPreferences = () => {
             if (preferences.actionType) {
                 newTemplateForm.value.actionType = preferences.actionType
             }
+            if (Array.isArray(preferences.applyFields)) {
+                newTemplateForm.value.applyFields = preferences.applyFields.filter((v: string) =>
+                    ['cover', 'desc', 'tag', 'source', 'title'].includes(v)
+                )
+            }
         }
     } catch (error) {
         console.error('加载用户偏好设置失败:', error)
+    }
+
+    try {
+        const rawFields = localStorage.getItem(NEW_TEMPLATE_APPLY_FIELDS_KEY)
+        if (rawFields) {
+            const fields = JSON.parse(rawFields)
+            if (Array.isArray(fields)) {
+                newTemplateForm.value.applyFields = fields.filter((v: string) =>
+                    ['cover', 'desc', 'tag', 'source', 'title'].includes(v)
+                )
+            }
+        }
+    } catch (error) {
+        console.error('加载应用字段偏好失败:', error)
     }
 }
 
@@ -194,9 +217,14 @@ const saveUserPreferences = () => {
         const preferences = {
             userUid: newTemplateForm.value.userUid,
             templateType: newTemplateForm.value.templateType,
-            actionType: newTemplateForm.value.actionType
+            actionType: newTemplateForm.value.actionType,
+            applyFields: newTemplateForm.value.applyFields
         }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences))
+        localStorage.setItem(
+            NEW_TEMPLATE_APPLY_FIELDS_KEY,
+            JSON.stringify(newTemplateForm.value.applyFields || [])
+        )
     } catch (error) {
         console.error('保存用户偏好设置失败:', error)
     }
@@ -206,6 +234,11 @@ const saveUserPreferences = () => {
 watch(() => newTemplateForm.value.userUid, saveUserPreferences)
 watch(() => newTemplateForm.value.templateType, saveUserPreferences)
 watch(() => newTemplateForm.value.actionType, saveUserPreferences)
+watch(
+    () => newTemplateForm.value.applyFields,
+    () => saveUserPreferences(),
+    { deep: true }
+)
 
 // 当对话框打开时加载用户偏好
 watch(
@@ -228,7 +261,6 @@ const resetForm = () => {
     newTemplateForm.value.name = ''
     newTemplateForm.value.bvNumber = ''
     newTemplateForm.value.folderPath = ''
-    newTemplateForm.value.applyFields = ['cover', 'desc', 'tag', 'source', 'title']
     // 不重置 userUid, templateType, actionType，保持用户上次的选择
 }
 
@@ -251,7 +283,6 @@ const pickContentFolder = async () => {
 
 const clearContentFolder = () => {
     newTemplateForm.value.folderPath = ''
-    newTemplateForm.value.applyFields = ['cover', 'desc', 'tag', 'source', 'title']
 }
 
 // 创建新模板

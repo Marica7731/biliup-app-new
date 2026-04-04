@@ -49,6 +49,24 @@ export const useUtilsStore = defineStore('template', () => {
         }
     }
 
+    const readTextFile = async (filePath: string): Promise<string> => {
+        try {
+            return await invoke<string>('read_text_file', { filePath })
+        } catch (error) {
+            console.error('读取文本文件失败:', error)
+            throw error
+        }
+    }
+
+    const readFileBase64 = async (filePath: string): Promise<string> => {
+        try {
+            return await invoke<string>('read_file_base64', { filePath })
+        } catch (error) {
+            console.error('读取文件失败:', error)
+            throw error
+        }
+    }
+
     const downloadCover = async (uid: number, url: string) => {
         if (!url) {
             return undefined
@@ -196,6 +214,50 @@ export const useUtilsStore = defineStore('template', () => {
         }
     }
 
+    const exportLogsSince = async (exportPath: string, sinceTs: number): Promise<string> => {
+        try {
+            const result = await invoke<string>('export_logs_since', {
+                exportPath,
+                sinceTs
+            })
+            showMessage('本次日志导出成功', 'success')
+            return result
+        } catch (error) {
+            console.error('导出本次日志失败:', error)
+            showMessage(`导出本次日志失败: ${error}`, 'error')
+            throw error
+        }
+    }
+
+    const exportCurrentSessionLog = async (exportPath: string, sinceTs: number): Promise<string> => {
+        try {
+            const result = await invoke<string>('export_current_session_log', {
+                exportPath,
+                sinceTs
+            })
+            showMessage('本次日志已导出', 'success')
+            return result
+        } catch (error) {
+            console.error('导出本次日志失败:', error)
+            showMessage(`导出本次日志失败: ${error}`, 'error')
+            throw error
+        }
+    }
+
+    const clearOldLogs = async (beforeTs?: number): Promise<number> => {
+        try {
+            const removed = await invoke<number>('clear_old_logs', {
+                beforeTs: beforeTs ?? null
+            })
+            showMessage(`已清理 ${removed} 个旧日志文件`, 'success')
+            return removed
+        } catch (error) {
+            console.error('清理旧日志失败:', error)
+            showMessage(`清理旧日志失败: ${error}`, 'error')
+            throw error
+        }
+    }
+
     // 检查更新
     const checkUpdate = async (): Promise<string | null> => {
         try {
@@ -224,6 +286,8 @@ export const useUtilsStore = defineStore('template', () => {
         getCurrentVersion,
         getFileSize,
         readDirRecursive,
+        readTextFile,
+        readFileBase64,
         uploadCover,
         downloadCover,
         initTypeList,
@@ -236,6 +300,9 @@ export const useUtilsStore = defineStore('template', () => {
         switchSeason,
         showMessage,
         exportLogs,
+        exportLogsSince,
+        exportCurrentSessionLog,
+        clearOldLogs,
         checkUpdate,
         log
     }

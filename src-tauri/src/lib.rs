@@ -94,7 +94,7 @@ fn setup_logs(log_level: &str) -> Result<()> {
     let log_dir = get_log_path()?;
     let log_file = format!(
         "biliup-{}.log",
-        chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S")
+        chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
     );
     let file_appender = tracing_appender::rolling::never(log_dir, &log_file);
 
@@ -108,8 +108,10 @@ fn setup_logs(log_level: &str) -> Result<()> {
     };
 
     use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing_subscriber::fmt::time::ChronoLocal;
 
     let file_layer = tracing_subscriber::fmt::layer()
+        .with_timer(ChronoLocal::new("%Y-%m-%d %H:%M:%S%.6f".to_string()))
         .with_writer(file_appender)
         .with_ansi(false) // 禁用 ANSI 颜色代码
         .with_target(false)
@@ -118,6 +120,7 @@ fn setup_logs(log_level: &str) -> Result<()> {
         .with_line_number(true);
 
     let console_layer = tracing_subscriber::fmt::layer()
+        .with_timer(ChronoLocal::new("%Y-%m-%d %H:%M:%S%.6f".to_string()))
         .with_writer(std::io::stdout)
         .with_ansi(true) // 启用 ANSI 颜色代码
         .with_target(false)
@@ -204,6 +207,7 @@ pub async fn run() {
             pause_upload,
             cancel_upload,
             get_upload_queue,
+            get_upload_runtime_status,
             retry_upload,
             submit,
             // 配置相关命令
@@ -221,6 +225,8 @@ pub async fn run() {
             get_current_version,
             get_file_size,
             read_dir_recursive,
+            read_text_file,
+            read_file_base64,
             upload_cover,
             store_local_cover,
             download_cover,
@@ -232,6 +238,9 @@ pub async fn run() {
             get_video_season,
             switch_season,
             export_logs,
+            export_logs_since,
+            export_current_session_log,
+            clear_old_logs,
             check_update,
             console_log
         ])

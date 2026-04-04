@@ -40,7 +40,17 @@ export interface TemplateConfig {
     up_close_danmu: number
     atomic_int: number
     is_only_self: number
+    space_hidden: number
     watermark: number
+    import_title_format_template?: string
+    ai_title_format_template?: string
+    ai_title_source?: 'clean' | 'original'
+    template_title_seed?: string
+    imported_original_title?: string
+    imported_clean_title?: string
+    imported_date?: string
+    imported_source_url?: string
+    auto_close_after_submit?: boolean
 }
 
 interface UserConfig {
@@ -155,7 +165,17 @@ export const useUserConfigStore = defineStore('userConfig', () => {
         up_close_danmu: 0,
         atomic_int: 0,
         is_only_self: 0,
-        watermark: 0
+        space_hidden: 0,
+        watermark: 0,
+        import_title_format_template: undefined,
+        ai_title_format_template: undefined,
+        ai_title_source: 'clean',
+        template_title_seed: undefined,
+        imported_original_title: undefined,
+        imported_clean_title: undefined,
+        imported_date: undefined,
+        imported_source_url: undefined,
+        auto_close_after_submit: false
     })
 
     // 配置文件操作

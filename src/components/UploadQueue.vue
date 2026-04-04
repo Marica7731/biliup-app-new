@@ -13,6 +13,12 @@
         <template #dropdown>
             <el-dropdown-menu class="queue-dropdown-menu">
                 <div class="queue-header">
+                    <div v-if="isCoolingDown" class="cooldown-banner">
+                        <span class="cooldown-title">限流冷却中</span>
+                        <span class="cooldown-text">
+                            检测到 B 站上传限流，自动提交将在 {{ cooldownRemainingText }} 后恢复。
+                        </span>
+                    </div>
                     <el-button
                         link
                         size="small"
@@ -158,6 +164,21 @@ import {
 
 const uploadStore = useUploadStore()
 const utilsStore = useUtilsStore()
+
+const isCoolingDown = computed(() => {
+    const until = uploadStore.uploadRuntimeStatus?.cooldown_until_ms
+    return Boolean(until && until > Date.now())
+})
+
+const cooldownRemainingText = computed(() => {
+    const until = uploadStore.uploadRuntimeStatus?.cooldown_until_ms
+    if (!until || until <= Date.now()) return '0秒'
+    const remainMs = until - Date.now()
+    const totalSeconds = Math.ceil(remainMs / 1000)
+    const mins = Math.floor(totalSeconds / 60)
+    const secs = totalSeconds % 60
+    return mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`
+})
 
 // 计算属性
 const uploadQueue = computed(() => {
@@ -515,6 +536,30 @@ const getTaskWarningTooltip = (task: any): string => {
     return ''
 }
 </script>
+
+<style scoped>
+.cooldown-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 10px 8px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(220, 38, 38, 0.12), rgba(249, 115, 22, 0.12));
+    border: 1px solid rgba(220, 38, 38, 0.22);
+    color: #991b1b;
+}
+
+.cooldown-title {
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.cooldown-text {
+    font-size: 12px;
+    line-height: 1.4;
+}
+</style>
 
 <style scoped>
 /* 上传队列样式 */
