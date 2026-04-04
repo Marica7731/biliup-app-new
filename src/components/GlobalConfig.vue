@@ -1,0 +1,998 @@
+<template>
+    <el-dialog
+        v-model="visible"
+        title="全局设置"
+        width="500px"
+        :before-close="handleClose"
+        @close="handleDialogClose"
+    >
+        <el-form :model="configForm" label-width="140px" v-loading="loading">
+            <el-collapse v-model="configSections">
+                <el-collapse-item title="基础设置" name="basic">
+
+            <!-- 最大并发任务数 -->
+            <el-form-item label="最大并发任务数">
+                <div class="slider-container">
+                    <el-slider
+                        v-model="configForm.max_curr"
+                        :min="1"
+                        :max="12"
+                        :step="1"
+                        show-stops
+                        show-input
+                        :input-size="'small'"
+                    />
+                </div>
+                <div class="form-tip">控制同时进行的上传任务数量，建议根据网络状况调整</div>
+                <div class="form-tip">已经开始的任务，即使暂停或失败同样占用一条并发数</div>
+            </el-form-item>
+
+            <!-- 自动添加到上传队列 -->
+            <el-form-item label="自动添加到上传队列">
+                <el-switch
+                    v-model="configForm.auto_upload"
+                    active-text="开启"
+                    inactive-text="关闭"
+                />
+                <div class="form-tip">开启后，创建上传任务时会自动添加到上传队列</div>
+            </el-form-item>
+
+            <!-- 自动开始任务 -->
+            <el-form-item label="自动开始任务">
+                <el-switch
+                    v-model="configForm.auto_start"
+                    active-text="开启"
+                    inactive-text="关闭"
+                />
+                <div class="form-tip">开启后，任务添加到队列后会自动开始上传</div>
+            </el-form-item>
+
+            <!-- 日志级别 -->
+            <el-form-item label="日志级别">
+                <el-select v-model="configForm.log_level" placeholder="请选择日志级别">
+                    <el-option label="Trace" value="trace" />
+                    <el-option label="Debug" value="debug" />
+                    <el-option label="Info" value="info" />
+                    <el-option label="Warn" value="warn" />
+                    <el-option label="Error" value="error" />
+                </el-select>
+                <div class="form-tip">
+                    <el-text type="warning">该配置程序重启后生效</el-text>
+                </div>
+            </el-form-item>
+
+            <!-- 配置导入导出 -->
+            <el-form-item label="配置导入/导出">
+                <div class="import-export-row">
+                    <el-checkbox v-model="includeCookie">包含 Cookie</el-checkbox>
+                    <el-button size="small" @click="exportConfig">导出配置</el-button>
+                    <el-button size="small" @click="importConfig">导入配置</el-button>
+                </div>
+                <div class="form-tip">导入后建议重启程序以刷新登录状态</div>
+            </el-form-item>
+
+            <!-- 默认目录设置 -->
+            <el-form-item label="默认封面目录">
+                <div class="path-setting-row">
+                    <el-input v-model="defaultCoverDir" readonly placeholder="未设置" />
+                    <el-button size="small" @click="selectDefaultCoverDir">设置</el-button>
+                    <el-button size="small" @click="clearDefaultCoverDir">清除</el-button>
+                </div>
+            </el-form-item>
+            <el-form-item label="默认视频目录">
+                <div class="path-setting-row">
+                    <el-input v-model="defaultVideoDir" readonly placeholder="未设置" />
+                    <el-button size="small" @click="selectDefaultVideoDir">设置</el-button>
+                    <el-button size="small" @click="clearDefaultVideoDir">清除</el-button>
+                </div>
+            </el-form-item>
+            <el-form-item label="模板标签页上限">
+                <div class="slider-container">
+                    <el-slider
+                        v-model="templateTabMax"
+                        :min="3"
+                        :max="30"
+                        :step="1"
+                        show-stops
+                        show-input
+                        :input-size="'small'"
+                    />
+                </div>
+                <div class="form-tip">默认 15，可按需要调整</div>
+            </el-form-item>
+            <el-form-item label="封面缩略图大小">
+                <el-radio-group v-model="templateCoverSize">
+                    <el-radio-button :value="32">小</el-radio-button>
+                    <el-radio-button :value="48">中</el-radio-button>
+                    <el-radio-button :value="64">大</el-radio-button>
+                </el-radio-group>
+                <div class="form-tip">小尺寸会显著减少旧配置里大图封面的渲染压力</div>
+            </el-form-item>
+
+                </el-collapse-item>
+                <el-collapse-item title="AI 连接" name="ai-connection">
+
+            <el-form-item label="API 地址">
+                <el-input v-model="aiConfig.apiBase" placeholder="https://api.deepseek.com" />
+                <div class="form-tip">使用 OpenAI 兼容接口，默认会请求 `/chat/completions`</div>
+            </el-form-item>
+
+            <el-form-item label="API Key">
+                <el-input
+                    v-model="aiConfig.apiKey"
+                    type="password"
+                    show-password
+                    placeholder="请输入 API Key"
+                />
+            </el-form-item>
+
+            <el-form-item label="模型名称">
+                <el-input v-model="aiConfig.model" placeholder="deepseek-chat" />
+                <div class="form-tip">默认支持 `deepseek-chat`、`deepseek-reasoner`，也可改成其他 OpenAI 兼容模型</div>
+            </el-form-item>
+
+            <el-form-item label="简介目标上限">
+                <el-input-number v-model="aiConfig.descLimit" :min="200" :max="1900" />
+                <div class="form-tip">AI 压缩简介时，会尽量收敛到该上限以内</div>
+            </el-form-item>
+
+            <el-form-item label="导入默认标签">
+                <el-input v-model="aiConfig.defaultImportTags" placeholder="例如：翻唱,歌回" />
+                <div class="form-tip">应用模板文件夹时会自动追加这些标签，使用英文逗号分隔</div>
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="AI 标题" name="ai-title">
+            <el-form-item label="默认导入标题预设">
+                <el-input v-model="aiConfig.importTitleFormatTemplate" type="textarea" :rows="3" />
+                <div class="form-tip">
+                    可用变量：`${template_title}` `${date}` `${month}` `${original_title}` `${clean_title}` `${video_id}` `${uploader_name}` `${uploader_handle}` `${uploader_credit}` `${tag_list}` `${tag1}` `${tag2}`
+                </div>
+                <div class="form-tip">模板文件夹导入时会按这里的默认预设拼接整标题。默认：`${template_title}[${date}]${clean_title}`</div>
+            </el-form-item>
+
+            <el-form-item label="默认 AI 标题预设">
+                <el-input v-model="aiConfig.aiTitleFormatTemplate" type="textarea" :rows="3" />
+                <div class="form-tip">
+                    可用变量：`${template_title}` `${date}` `${month}` `${original_title}` `${clean_title}` `${translated_title}` `${video_id}` `${uploader_name}` `${uploader_handle}` `${uploader_credit}` `${tag_list}` `${tag1}` `${tag2}`
+                </div>
+                <div class="form-tip">AI 标题应用时会按这里的默认预设拼接整标题。默认：`${template_title}[${date}]${translated_title}`</div>
+            </el-form-item>
+
+            <el-form-item label="标题附加规则">
+                <el-input v-model="aiConfig.titleRuleNotes" type="textarea" :rows="4" />
+            </el-form-item>
+
+            <el-form-item label="风格1名称">
+                <el-input v-model="aiConfig.titleStyleName1" />
+            </el-form-item>
+            <el-form-item label="标题提示词1">
+                <el-input v-model="aiConfig.titlePrompt1" type="textarea" :rows="5" />
+            </el-form-item>
+
+            <el-form-item label="风格2名称">
+                <el-input v-model="aiConfig.titleStyleName2" />
+            </el-form-item>
+            <el-form-item label="标题提示词2">
+                <el-input v-model="aiConfig.titlePrompt2" type="textarea" :rows="5" />
+            </el-form-item>
+
+            <el-form-item label="风格3名称">
+                <el-input v-model="aiConfig.titleStyleName3" />
+            </el-form-item>
+            <el-form-item label="标题提示词3">
+                <el-input v-model="aiConfig.titlePrompt3" type="textarea" :rows="5" />
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="AI 标签" name="ai-tag">
+            <el-form-item label="标签附加规则">
+                <el-input v-model="aiConfig.tagRuleNotes" type="textarea" :rows="4" />
+            </el-form-item>
+
+            <el-form-item label="标签提示词">
+                <el-input v-model="aiConfig.tagPrompt" type="textarea" :rows="6" />
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="AI 简介" name="ai-desc">
+            <el-form-item label="简介附加规则">
+                <el-input v-model="aiConfig.descRuleNotes" type="textarea" :rows="4" />
+            </el-form-item>
+
+            <el-form-item label="简介提示词">
+                <el-input v-model="aiConfig.descPrompt" type="textarea" :rows="6" />
+            </el-form-item>
+
+            <el-form-item label="AI 配置操作">
+                <el-button size="small" @click="resetAIDefaults">重置 AI 默认配置</el-button>
+            </el-form-item>
+                </el-collapse-item>
+                <el-collapse-item title="用户配置" name="user">
+
+            <!-- 用户选择下拉框 -->
+            <el-form-item label="选择用户">
+                <el-select
+                    v-model="selectedUserUid"
+                    placeholder="请选择要配置的用户"
+                    @change="handleUserChange"
+                    class="user-select"
+                >
+                    <el-option
+                        v-for="user in loginUsers"
+                        :key="user.uid"
+                        :label="user.username"
+                        :value="user.uid"
+                    >
+                        <div class="user-option">
+                            <el-avatar :src="`data:image/jpeg;base64,${user.avatar}`" :size="20">
+                                {{ user.username.charAt(0) }}
+                            </el-avatar>
+                            <span class="user-option-name">{{ user.username }}</span>
+                            <span class="user-option-uid">UID: {{ user.uid }}</span>
+                        </div>
+                    </el-option>
+                </el-select>
+                <div class="form-tip">选择要修改配置的用户</div>
+            </el-form-item>
+
+            <!-- 用户配置内容 -->
+            <div v-if="selectedUser" class="user-config-section">
+                <el-form :model="userConfigForm" label-width="140px" v-loading="userConfigLoading">
+                    <!-- 线路选择 -->
+                    <el-form-item label="上传线路">
+                        <el-select v-model="userConfigForm.line" placeholder="请选择上传线路">
+                            <el-option label="自动选择" value="auto" />
+                            <el-option label="BDA2" value="bda2" />
+                            <el-option label="WS" value="ws" />
+                            <el-option label="QN" value="qn" />
+                            <el-option label="BLDSA" value="bldsa" />
+                            <el-option label="TX" value="tx" />
+                            <el-option label="TXA" value="txa" />
+                            <el-option label="BDA" value="bda" />
+                            <el-option label="ALIA" value="alia" />
+                        </el-select>
+                        <div class="form-tip">自动选择将根据网络环境自动选择最优线路</div>
+                    </el-form-item>
+
+                    <!-- 代理设置 -->
+                    <el-form-item label="代理设置">
+                        <el-checkbox v-model="userProxyForm.enabled" class="proxy-checkbox">
+                            启用代理
+                        </el-checkbox>
+
+                        <div v-show="userProxyForm.enabled" class="proxy-config">
+                            <el-form-item label="代理类型" style="margin-top: 10px">
+                                <el-select
+                                    v-model="userProxyForm.type"
+                                    placeholder="选择代理类型"
+                                    class="proxy-type-select"
+                                >
+                                    <el-option label="HTTP" value="http" />
+                                    <el-option label="HTTPS" value="https" />
+                                    <el-option label="SOCKS5" value="socks5" />
+                                </el-select>
+                            </el-form-item>
+
+                            <el-form-item label="服务器地址">
+                                <el-input
+                                    v-model="userProxyForm.host"
+                                    placeholder="127.0.0.1"
+                                    class="proxy-input"
+                                />
+                            </el-form-item>
+
+                            <el-form-item label="端口">
+                                <el-input-number
+                                    v-model="userProxyForm.port"
+                                    :min="1"
+                                    :max="65535"
+                                    placeholder="8080"
+                                    class="proxy-port"
+                                />
+                            </el-form-item>
+
+                            <el-form-item label="用户名">
+                                <el-input
+                                    v-model="userProxyForm.username"
+                                    placeholder="用户名（可选）"
+                                    class="proxy-input"
+                                />
+                            </el-form-item>
+
+                            <el-form-item label="密码">
+                                <el-input
+                                    v-model="userProxyForm.password"
+                                    type="password"
+                                    placeholder="密码（可选）"
+                                    class="proxy-input"
+                                    show-password
+                                />
+                            </el-form-item>
+                        </div>
+                        <div class="form-tip">配置代理服务器用于网络访问</div>
+                    </el-form-item>
+
+                    <!-- 限流设置 -->
+                    <el-form-item label="单视频并发数">
+                        <div class="rate-limit-container">
+                            <el-slider
+                                v-model="userConfigForm.limit"
+                                :min="1"
+                                :max="12"
+                                :step="1"
+                                show-stops
+                                show-input
+                                :input-size="'small'"
+                            />
+                        </div>
+                    </el-form-item>
+
+                    <!-- 水印设置 -->
+                    <el-form-item label="默认开启水印">
+                        <el-checkbox
+                            v-model="userConfigForm.watermark"
+                            :true-value="1"
+                            :false-value="0"
+                        >
+                            开启
+                        </el-checkbox>
+                    </el-form-item>
+
+                    <el-form-item label="上传完成自动编辑">
+                        <el-checkbox
+                            v-model="userConfigForm.auto_edit"
+                            :true-value="1"
+                            :false-value="0"
+                        >
+                            开启
+                        </el-checkbox>
+                    </el-form-item>
+                </el-form>
+            </div>
+                </el-collapse-item>
+            </el-collapse>
+        </el-form>
+
+        <template #footer>
+            <span class="dialog-footer">
+                <el-button @click="handleCancel">取消</el-button>
+                <el-button type="primary" @click="handleSave" :loading="saving"> 保存 </el-button>
+            </span>
+        </template>
+    </el-dialog>
+</template>
+
+<script setup lang="ts">
+import { ref, watch, computed } from 'vue'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
+import { ElMessageBox } from 'element-plus'
+import { useUserConfigStore } from '../stores/user_config'
+import { useAuthStore } from '../stores/auth'
+import { useUtilsStore } from '../stores/utils'
+
+// 全局配置表单接口
+interface GlobalConfigForm {
+    max_curr: number
+    auto_upload: boolean
+    auto_start: boolean
+    log_level: string
+}
+
+interface AIConfigForm {
+    apiBase: string
+    apiKey: string
+    model: string
+    descLimit: number
+    defaultImportTags: string
+    importTitleFormatTemplate: string
+    aiTitleFormatTemplate: string
+    titleStyleName1: string
+    titleStyleName2: string
+    titleStyleName3: string
+    titleRuleNotes: string
+    titlePrompt1: string
+    titlePrompt2: string
+    titlePrompt3: string
+    tagRuleNotes: string
+    tagPrompt: string
+    descRuleNotes: string
+    descPrompt: string
+}
+
+// Props
+const props = defineProps<{
+    modelValue: boolean
+}>()
+
+// Emits
+const emit = defineEmits<{
+    'update:modelValue': [value: boolean]
+    'config-updated': []
+}>()
+
+// Store
+const userConfigStore = useUserConfigStore()
+const authStore = useAuthStore()
+const utilsStore = useUtilsStore()
+
+// 响应式数据
+const visible = ref(false)
+const loading = ref(false)
+const saving = ref(false)
+const includeCookie = ref(true)
+const defaultCoverDir = ref(localStorage.getItem('default-cover-dir') || '')
+const defaultVideoDir = ref(localStorage.getItem('default-video-dir') || '')
+const templateTabMax = ref(
+    Number.parseInt(localStorage.getItem('template-tab-max') || '15', 10) || 15
+)
+const templateCoverSize = ref(
+    Number.parseInt(localStorage.getItem('template-cover-size') || '32', 10) || 32
+)
+const configSections = ref(['basic', 'ai-connection', 'ai-title'])
+const AI_CONFIG_KEY = 'ai-config-v1'
+const AI_CONFIG_VERSION = 8
+const getDefaultAIConfig = (): AIConfigForm => ({
+    apiBase: 'https://api.deepseek.com',
+    apiKey: '',
+    model: 'deepseek-chat',
+    descLimit: 1800,
+    defaultImportTags: '翻唱',
+    importTitleFormatTemplate: '${template_title}[${date}]${clean_title}',
+    aiTitleFormatTemplate: '${template_title}[${date}]${translated_title}',
+    titleStyleName1: '简洁直译',
+    titleStyleName2: '吸睛标题',
+    titleStyleName3: '极简封面',
+    titleRuleNotes:
+        '不要输出任何 #标签；保留原文 emoji；「歌枠」优先译为「歌回」；人名、频道名不要翻译；AI 只负责当前选中的标题源正文，不负责日期和视频 ID。',
+    titlePrompt1:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为简洁直译版，结构尽量贴近原文；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    titlePrompt2:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为短视频吸睛标题风，节奏更明快；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    titlePrompt3:
+        '请只改写下面这段标题正文，并生成 1 个结果。\n\n要求：\n1. 风格为极简封面版，精炼紧凑，适合封面小字；\n2. 禁止输出日期、月份、视频 ID、特征码；\n3. 禁止输出任何 #标签，如 #shorts、#karaoke；\n4. 禁止输出仅由标签组成的括号内容，如【#歌枠】；\n5. 不要补模板前缀，不要补上传者名，不要补频道名；\n6. 只输出 1 行标题正文，不加解释。\n\n附加规则：{{title_rules}}\n标题正文：{{ai_source_title}}',
+    tagRuleNotes:
+        '不要翻译现有标签；不要新增泛标签；仅允许以下特例：shorts -> 竖屏，歌枠 -> 歌回,歌枠；删除 新人Vtuber；保留人名、频道名、企划名与原文大小写。',
+    tagPrompt:
+        '请将以下标签整理为适合 B 站投稿的标签列表。\n要求：\n1. 不要翻译现有标签，不要把日文或英文改成中文；\n2. 不要新增「音乐」「虚拟主播」「直播」这类泛标签；\n3. 只允许在原标签基础上做删减、去重、大小写纠正，以及命中特例规则；\n4. 输出 1 行，使用英文逗号分隔；\n5. 最多输出 12 个标签；\n6. 不要解释。\n附加规则：{{tag_rules}}\n当前标签：{{tags}}\n原标题：{{original_title}}\n简介最后一行：{{last_line}}',
+    descRuleNotes:
+        '尽量缩减换行和多余空格；不要翻译；尽量不改变原简介；优先删掉不重要段落。',
+    descPrompt:
+        '请压缩下面的投稿简介，使其更适合 B 站投稿。\n要求：\n1. 输出纯文本，不加解释；\n2. 保留开头的元信息行；\n3. 目标上限：{{limit}}。\n附加规则：{{desc_rules}}\n简介原文：\n{{desc}}'
+})
+const loadAIConfig = (): AIConfigForm => {
+    try {
+        const raw = localStorage.getItem(AI_CONFIG_KEY)
+        if (!raw) return getDefaultAIConfig()
+        const parsed = (JSON.parse(raw) || {}) as Record<string, any>
+        const defaults = getDefaultAIConfig()
+        const version = Number(parsed._version || 0)
+        if (version < AI_CONFIG_VERSION) {
+            return {
+                ...defaults,
+                apiBase: String(parsed.apiBase || defaults.apiBase),
+                apiKey: String(parsed.apiKey || defaults.apiKey),
+                model: String(parsed.model || defaults.model),
+                descLimit: Number(parsed.descLimit || defaults.descLimit),
+                defaultImportTags: String(parsed.defaultImportTags || defaults.defaultImportTags)
+            }
+        }
+        return { ...defaults, ...parsed }
+    } catch {
+        return getDefaultAIConfig()
+    }
+}
+const aiConfig = ref<AIConfigForm>(getDefaultAIConfig())
+
+// 用户配置相关
+const selectedUserUid = ref<number | null>(null)
+const userConfigLoading = ref(false)
+
+const userConfigForm = ref({
+    line: 'auto',
+    limit: 0,
+    watermark: 0,
+    auto_edit: 0
+})
+
+const userProxyForm = ref({
+    enabled: false,
+    type: 'http',
+    host: '',
+    port: 8080,
+    username: '',
+    password: ''
+})
+
+// 计算属性
+const loginUsers = computed(() => authStore.loginUsers)
+const selectedUser = computed(
+    () => loginUsers.value.find(user => user.uid === selectedUserUid.value) || null
+)
+
+const configForm = ref<GlobalConfigForm>({
+    max_curr: 1,
+    auto_upload: true,
+    auto_start: true,
+    log_level: 'info'
+})
+
+// 保存原始配置用于检查变化
+const originalConfig = ref<GlobalConfigForm>({
+    max_curr: 1,
+    auto_upload: true,
+    auto_start: true,
+    log_level: 'info'
+})
+
+// 监听 modelValue 变化
+watch(
+    () => props.modelValue,
+    newValue => {
+        visible.value = newValue
+        if (newValue) {
+            loadGlobalConfig()
+            // 当对话框打开时，如果有用户且没有选择用户，默认选择第一个
+            if (loginUsers.value.length > 0 && !selectedUserUid.value) {
+                selectedUserUid.value = loginUsers.value[0].uid
+                loadUserConfig(loginUsers.value[0].uid)
+            }
+        }
+    },
+    { immediate: true }
+)
+
+// 监听 visible 变化
+watch(visible, newValue => {
+    emit('update:modelValue', newValue)
+})
+
+// 监听登录用户变化，自动选择第一个用户
+watch(
+    () => loginUsers.value,
+    newUsers => {
+        // 如果当前没有选择用户，或者选择的用户不在新的用户列表中，选择第一个用户
+        if (visible.value && newUsers.length > 0) {
+            const currentUserExists = newUsers.some(user => user.uid === selectedUserUid.value)
+            if (!selectedUserUid.value || !currentUserExists) {
+                selectedUserUid.value = newUsers[0].uid
+                loadUserConfig(newUsers[0].uid)
+            }
+        } else if (newUsers.length === 0) {
+            // 如果没有用户了，清空选择
+            selectedUserUid.value = null
+        }
+    },
+    { immediate: true, deep: true }
+)
+
+// 加载全局配置
+const loadGlobalConfig = async () => {
+    loading.value = true
+    try {
+        templateTabMax.value =
+            Number.parseInt(localStorage.getItem('template-tab-max') || '15', 10) || 15
+        templateCoverSize.value =
+            Number.parseInt(localStorage.getItem('template-cover-size') || '32', 10) || 32
+        aiConfig.value = loadAIConfig()
+
+        // 确保配置已加载
+        if (!userConfigStore.configRoot) {
+            await userConfigStore.loadConfig()
+        }
+
+        if (userConfigStore.configRoot) {
+            const config = userConfigStore.configRoot
+            configForm.value = {
+                max_curr: config.max_curr || 2,
+                auto_upload: config.auto_upload ?? true,
+                auto_start: config.auto_start ?? true,
+                log_level: config.log_level || 'info'
+            }
+
+            // 保存原始配置
+            originalConfig.value = { ...configForm.value }
+        }
+    } catch (error) {
+        console.error('加载全局配置失败:', error)
+        utilsStore.showMessage(`加载全局配置失败: ${error}`, 'error')
+    } finally {
+        loading.value = false
+    }
+}
+
+// 保存配置
+const handleSave = async () => {
+    saving.value = true
+    try {
+        // 确保配置根对象存在
+        if (!userConfigStore.configRoot) {
+            await userConfigStore.loadConfig()
+        }
+
+        if (!userConfigStore.configRoot) {
+            throw new Error('无法加载配置')
+        }
+
+        // 更新全局配置
+        await userConfigStore.updateGlobalConfig({
+            max_curr: configForm.value.max_curr,
+            auto_upload: configForm.value.auto_upload,
+            auto_start: configForm.value.auto_start,
+            log_level: configForm.value.log_level
+        })
+
+        // 如果选择了用户，保存用户配置
+        if (selectedUserUid.value) {
+            // 构建代理URL
+            let proxyUrl = ''
+            if (userProxyForm.value.enabled && userProxyForm.value.host) {
+                const auth =
+                    userProxyForm.value.username && userProxyForm.value.password
+                        ? `${userProxyForm.value.username}:${userProxyForm.value.password}@`
+                        : ''
+                proxyUrl = `${userProxyForm.value.type}://${auth}${userProxyForm.value.host}:${userProxyForm.value.port}`
+            }
+
+            // 更新用户配置
+            const userConfig = userConfigStore.configRoot.config[selectedUserUid.value]
+            if (!userConfig) {
+                throw new Error('用户配置不存在')
+            }
+
+            userConfig.line =
+                userConfigForm.value.line === 'auto' ? undefined : userConfigForm.value.line
+            userConfig.proxy = proxyUrl || undefined
+            userConfig.limit = userConfigForm.value.limit
+            userConfig.watermark = userConfigForm.value.watermark || 0
+            userConfig.auto_edit = userConfigForm.value.auto_edit || 0
+
+            // 保存配置
+            await userConfigStore.updateUserConfig(selectedUserUid.value, userConfig)
+        }
+
+        localStorage.setItem('template-tab-max', String(Math.min(30, Math.max(3, templateTabMax.value))))
+        localStorage.setItem(
+            'template-cover-size',
+            String([32, 48, 64].includes(templateCoverSize.value) ? templateCoverSize.value : 32)
+        )
+        localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ ...aiConfig.value, _version: AI_CONFIG_VERSION }))
+
+        utilsStore.showMessage('配置保存成功', 'success')
+        emit('config-updated')
+        visible.value = false
+    } catch (error) {
+        console.error('保存配置失败:', error)
+        utilsStore.showMessage(`保存配置失败: ${error}`, 'error')
+    } finally {
+        saving.value = false
+    }
+}
+
+const resetAIDefaults = () => {
+    const defaults = getDefaultAIConfig()
+    aiConfig.value = {
+        ...defaults,
+        apiBase: aiConfig.value.apiBase || defaults.apiBase,
+        apiKey: aiConfig.value.apiKey || '',
+        model: aiConfig.value.model || defaults.model,
+        descLimit: aiConfig.value.descLimit || defaults.descLimit,
+        defaultImportTags: aiConfig.value.defaultImportTags || defaults.defaultImportTags
+    }
+    utilsStore.showMessage('AI 默认配置已重置，请保存后生效', 'success')
+}
+
+const exportConfig = async () => {
+    try {
+        const savePath = await save({
+            filters: [{ name: 'JSON', extensions: ['json'] }],
+            defaultPath: 'biliup-config.json'
+        })
+        if (!savePath) return
+        await invoke('export_config_to_path', {
+            path: savePath,
+            includeCookie: includeCookie.value
+        })
+        utilsStore.showMessage('配置导出成功', 'success')
+        if (!includeCookie.value) {
+            utilsStore.showMessage('导出文件不包含 Cookie，导入时需已有登录信息', 'warning')
+        }
+    } catch (error) {
+        console.error('导出配置失败:', error)
+        utilsStore.showMessage(`导出配置失败: ${error}`, 'error')
+    }
+}
+
+const importConfig = async () => {
+    try {
+        const selected = await open({
+            multiple: false,
+            filters: [{ name: 'JSON', extensions: ['json'] }]
+        })
+        if (!selected || selected.length === 0) return
+        const filePath = Array.isArray(selected) ? selected[0] : selected
+        const warning = (await invoke('import_config_from_path', {
+            path: filePath,
+            keepExistingCookie: true
+        })) as string
+        if (warning) {
+            utilsStore.showMessage(warning, 'warning')
+        }
+        await userConfigStore.loadConfig()
+        utilsStore.showMessage('配置导入成功', 'success')
+    } catch (error) {
+        console.error('导入配置失败:', error)
+        utilsStore.showMessage(`导入配置失败: ${error}`, 'error')
+    }
+}
+
+const selectDefaultCoverDir = async () => {
+    try {
+        const selected = await open({ directory: true, multiple: false })
+        if (!selected) return
+        defaultCoverDir.value = Array.isArray(selected) ? selected[0] : selected
+        localStorage.setItem('default-cover-dir', defaultCoverDir.value)
+    } catch (error) {
+        utilsStore.showMessage(`设置默认封面目录失败: ${error}`, 'error')
+    }
+}
+
+const clearDefaultCoverDir = () => {
+    defaultCoverDir.value = ''
+    localStorage.removeItem('default-cover-dir')
+}
+
+const selectDefaultVideoDir = async () => {
+    try {
+        const selected = await open({ directory: true, multiple: false })
+        if (!selected) return
+        defaultVideoDir.value = Array.isArray(selected) ? selected[0] : selected
+        localStorage.setItem('default-video-dir', defaultVideoDir.value)
+    } catch (error) {
+        utilsStore.showMessage(`设置默认视频目录失败: ${error}`, 'error')
+    }
+}
+
+const clearDefaultVideoDir = () => {
+    defaultVideoDir.value = ''
+    localStorage.removeItem('default-video-dir')
+}
+
+// 取消操作
+const handleCancel = () => {
+    visible.value = false
+}
+
+// 用户选择变化处理
+const handleUserChange = async (uid: number) => {
+    selectedUserUid.value = uid
+    await loadUserConfig(uid)
+}
+
+// 加载用户配置
+const loadUserConfig = async (uid: number) => {
+    userConfigLoading.value = true
+    try {
+        // 确保配置已加载
+        if (!userConfigStore.configRoot) {
+            await userConfigStore.loadConfig()
+        }
+
+        const userConfig = userConfigStore.configRoot?.config[uid]
+        if (userConfig) {
+            userConfigForm.value = {
+                line: userConfig.line || 'auto',
+                limit: userConfig.limit || 0,
+                watermark: userConfig.watermark || 0,
+                auto_edit: userConfig.auto_edit || 0
+            }
+
+            // 解析代理设置
+            const proxyUrl = userConfig.proxy || ''
+            if (proxyUrl) {
+                try {
+                    const url = new URL(proxyUrl)
+                    userProxyForm.value = {
+                        enabled: true,
+                        type: url.protocol.replace(':', ''),
+                        host: url.hostname,
+                        port: parseInt(url.port) || 8080,
+                        username: url.username || '',
+                        password: url.password || ''
+                    }
+                } catch {
+                    // 解析失败，使用默认值
+                    userProxyForm.value = {
+                        enabled: false,
+                        type: 'http',
+                        host: '',
+                        port: 8080,
+                        username: '',
+                        password: ''
+                    }
+                }
+            } else {
+                userProxyForm.value = {
+                    enabled: false,
+                    type: 'http',
+                    host: '',
+                    port: 8080,
+                    username: '',
+                    password: ''
+                }
+            }
+        } else {
+            // 用户配置不存在时，使用默认值
+            userConfigForm.value = {
+                line: 'auto',
+                limit: 0,
+                watermark: 0,
+                auto_edit: 0
+            }
+
+            userProxyForm.value = {
+                enabled: false,
+                type: 'http',
+                host: '',
+                port: 8080,
+                username: '',
+                password: ''
+            }
+        }
+    } catch (error) {
+        console.error('加载用户配置失败:', error)
+        utilsStore.showMessage(`加载用户配置失败: ${error}`, 'error')
+    } finally {
+        userConfigLoading.value = false
+    }
+}
+
+// 对话框关闭处理
+const handleClose = (done: () => void) => {
+    // 检查是否有未保存的更改
+    if (hasUnsavedChanges()) {
+        ElMessageBox.confirm('有未保存的更改，确定要关闭吗？', '确认', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+        })
+            .then(() => {
+                done()
+            })
+            .catch(() => {
+                // 用户取消关闭
+            })
+    } else {
+        done()
+    }
+}
+
+// 对话框关闭后的处理
+const handleDialogClose = () => {
+    // 重置表单为默认值
+    configForm.value = {
+        max_curr: 1,
+        auto_upload: true,
+        auto_start: true,
+        log_level: 'info'
+    }
+    originalConfig.value = { ...configForm.value }
+}
+
+// 检查是否有未保存的更改
+const hasUnsavedChanges = (): boolean => {
+    return (
+        configForm.value.max_curr !== originalConfig.value.max_curr ||
+        configForm.value.auto_upload !== originalConfig.value.auto_upload ||
+        configForm.value.auto_start !== originalConfig.value.auto_start
+    )
+}
+</script>
+
+<style scoped>
+.form-tip {
+    font-size: 12px;
+    color: #909399;
+    margin-top: 5px;
+    line-height: 1.4;
+}
+
+.slider-container {
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+.rate-limit-container {
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+.dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.el-switch {
+    margin-right: 10px;
+}
+
+/* 用户配置相关样式 */
+.user-select {
+    width: 100%;
+}
+
+.user-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.user-option-name {
+    flex: 1;
+    font-size: 14px;
+}
+
+.user-option-uid {
+    font-size: 12px;
+    color: #909399;
+}
+
+.user-config-section {
+    border-top: 1px solid #e1e6ea;
+    margin-top: 20px;
+    padding-top: 20px;
+}
+
+.proxy-checkbox {
+    margin-bottom: 10px;
+}
+
+.proxy-config {
+    background: #f8f9fa;
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 10px;
+}
+
+.import-export-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.path-setting-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.proxy-type-select {
+    width: 100%;
+}
+
+.proxy-input {
+    width: 100%;
+}
+
+.proxy-port {
+    width: 100%;
+}
+
+:deep(.el-form-item__label) {
+    font-weight: 500;
+}
+
+:deep(.el-slider) {
+    margin: 0 12px;
+}
+
+:deep(.el-divider__text) {
+    font-weight: 600;
+}
+
+:deep(.el-divider__text .el-text) {
+    font-size: 16px;
+}
+</style>
